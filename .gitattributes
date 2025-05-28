@@ -1,0 +1,20 @@
+# Normalize EOL for all files that Git considers text files.
+* text=auto eol=lf
+
+*.gitattributes text
+.gitignore      text
+*.md            text diff=markdown
+*.txt           text
+
+*.blade.php diff=html
+*.css diff=css
+*.html diff=html
+*.php diff=php
+
+# Fix syntax highlighting on GitHub to allow comments
+.vscode/*.json linguist-language=JSON-with-Comments
+
+# These are explicitly windows files and should use crlf
+*.bat           text eol=crlf
+*.cmd           text eol=crlf
+*.ps1           text eol=crlf
