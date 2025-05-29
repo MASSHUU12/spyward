@@ -16,11 +16,11 @@ extern (C)
 
     int nfq_close(nfq_handle* h);
 
-    int nfq_bind_pf(nfq_handle* h, int pf);
-    int nfq_unbind_pf(nfq_handle* h, int pf);
+    int nfq_bind_pf(nfq_handle* h, uint16_t pf);
+    int nfq_unbind_pf(nfq_handle* h, uint16_t pf);
 
     nfq_q_handle* nfq_create_queue(nfq_handle* h,
-        ushort queue_num,
+        uint16_t queue_num,
         int function(nfq_q_handle*, nfgenmsg*, nfq_data*, void*),
         void* data);
     int nfq_destroy_queue(nfq_q_handle* qh);
@@ -45,7 +45,8 @@ extern (C)
     struct nfqnl_msg_packet_hdr
     {
         uint32_t packet_id; /* in network byte order */
-        // … other fields …
+        uint16_t hw_protocol; /* hw protocol (network order) */
+        uint8_t hook; /* netfilter hook */
     }
 
     nfqnl_msg_packet_hdr* nfq_get_msg_packet_hdr(nfq_data* data);
