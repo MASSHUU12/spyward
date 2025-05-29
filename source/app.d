@@ -6,6 +6,7 @@ import core.sys.posix.fcntl;
 import core.sys.posix.net.if_;
 import core.sys.posix.sys.ioctl;
 import core.sys.posix.unistd;
+import std.process;
 import std.stdio;
 import std.string;
 
@@ -62,8 +63,17 @@ int main()
 
     writeln("Created TUN device: ", cast(string) ifr.ifr_name);
 
-    // TODO: Run in Docker container
-    // TODO: Redirect traffic to the tun0
+    // Bring up interface and redirect traffic
+    auto resultUp = executeShell("ip link set tun0 up");
+    auto resultRouteAdd = executeShell("ip route add default dev tun0");
+
+    if (resultUp.status != 0 || resultRouteAdd.status != 0)
+    {
+        stderr.writeln("Failed to bring up interface or add route.");
+        return 1;
+    }
+
+    writeln("Routing traffic through tun0...");
 
     ubyte[2000] buffer;
     while (true)
@@ -83,7 +93,9 @@ int main()
         }
     }
 
-    // TODO: Revert routing changes and clean up
+    // Revert routing changes and clean up
+    executeShell("ip route del default dev tun0");
+    executeShell("ip link set tun0 down");
 
     return 0;
 }
