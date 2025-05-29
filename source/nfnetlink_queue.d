@@ -1,6 +1,7 @@
 module nfnetlink_queue;
 
 import core.stdc.stdint;
+import core.sys.posix.arpa.inet;
 
 // /usr/include/libnetfilter_queue/libnetfilter_queue.h
 // /usr/include/libnetfilter_queue/linux_nfnetlink_queue.h
@@ -43,7 +44,8 @@ extern (C)
 
     struct nfqnl_msg_packet_hdr
     {
-        uint32_t packet_id; /* ... */
+        uint32_t packet_id; /* in network byte order */
+        // … other fields …
     }
 
     nfqnl_msg_packet_hdr* nfq_get_msg_packet_hdr(nfq_data* data);
@@ -64,7 +66,9 @@ extern (C)
 uint32_t extractPacketId(nfq_data* data)
 {
     auto ph = nfq_get_msg_packet_hdr(data);
-    return ph ? ph.packet_id : 0;
+    if (ph is null)
+        return 0;
+    return ntohl(ph.packet_id);
 }
 
 ubyte[] extractPayload(nfq_data* data)

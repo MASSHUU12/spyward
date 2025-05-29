@@ -1,101 +1,165 @@
 module main;
 
 import core.stdc.errno;
-import core.stdc.string;
-import core.sys.posix.fcntl;
-import core.sys.posix.net.if_;
-import core.sys.posix.sys.ioctl;
+import core.sys.posix.sys.socket;
 import core.sys.posix.unistd;
+import nfnetlink_queue;
+import std.exception;
 import std.process;
 import std.stdio;
 import std.string;
 
+import ip;
+
+enum Actions
+{
+    Start,
+    Stop,
+    Unknown
+}
+
 enum IFNAMSIZ = 16;
 alias c_short = short;
 
-enum
-{
-    // from <linux/if_tun.h>
-    IFF_TUN = 0x0001,
-    IFF_TAP = 0x0002,
-    IFF_NO_PI = 0x1000,
-    TUNSETIFF = 0x400454ca // _IOW('T', 202, int)
-}
-
-struct ifreq
-{
-    char[IFNAMSIZ] ifr_name;
-    c_short ifr_flags;
-}
-
-int main()
+void ensureRoot()
 {
     if (getuid() != 0)
     {
-        stderr.writeln("Error: This program needs to run with administrative privileges.");
-        return 1;
+        stderr.writeln("ERROR: This program needs to run with administrative privileges.");
+        _exit(1);
+    }
+}
+
+bool runCmd(string cmd)
+{
+    auto result = executeShell(cmd);
+    if (result.status != 0)
+    {
+        stderr.writeln("`", cmd, "` failed (exit ", result.status, ")");
+        return false;
+    }
+    return true;
+}
+
+void setupNftables()
+{
+    // TODO: Handle errors
+
+    // Create the inet table if it doesn't exist
+    runCmd("nft list table inet UTUNFILTER 2>/dev/null || " ~
+            "nft add table inet UTUNFILTER");
+
+    // Create (or verify) the input chain
+    runCmd("nft list chain inet UTUNFILTER input 2>/dev/null || " ~
+            "nft add chain inet UTUNFILTER input " ~ "{ type filter hook input priority 0 \\; policy accept \\; }");
+
+    // Create (or verify) the output chain
+    runCmd("nft list chain inet UTUNFILTER output 2>/dev/null || " ~
+            "nft add chain inet UTUNFILTER output " ~ "{ type filter hook output priority 0 \\; policy accept \\; }");
+
+    // Flush each chain and send to NFQUEUE #0
+    runCmd("nft flush chain inet UTUNFILTER input");
+    runCmd("nft flush chain inet UTUNFILTER output");
+    runCmd("nft add rule inet UTUNFILTER input queue num 0");
+    runCmd("nft add rule inet UTUNFILTER output queue num 0");
+}
+
+void teardownNftables()
+{
+    // TODO: Handle errors
+
+    // Deleting the table will remove all its chains & rules.
+    runCmd("nft delete table inet UTUNFILTER 2>/dev/null");
+}
+
+Actions parseArgs(string[] args)
+{
+    if (args.length >= 2)
+    {
+        switch (args[1])
+        {
+        case "start":
+            return Actions.Start;
+        case "stop":
+            return Actions.Stop;
+        default:
+            return Actions.Unknown;
+        }
+    }
+    return Actions.Unknown;
+}
+
+extern (C) int packetCallback(nfq_q_handle* qh, void* nfmsg, nfq_data* nfdata, void* _)
+{
+    ubyte[] payload = extractPayload(nfdata);
+    // TODO: Apply filter logic
+    int id = extractPacketId(nfdata);
+    writeln(id);
+
+    auto v = nfq_set_verdict(qh, id, NF_ACCEPT, 0, null);
+    if (v < 0)
+    {
+        stderr.writeln(errno);
+        return v;
     }
 
-    // Open TUN device
-    int fd = open("/dev/net/tun".toStringz, O_RDWR);
+    return v;
+}
+
+void startListenerLoop()
+{
+    auto h = nfq_open();
+    enforce(h !is null, "nfq_open failed");
+
+    enforce(nfq_bind_pf(h, AF_INET) == 0, "nfq_bind_pf failed");
+    auto qh = nfq_create_queue(h, 0, &packetCallback, null);
+    enforce(qh !is null, "nfq_create_queue failed");
+
+    // Pass entire packet
+    enforce(nfq_set_mode(qh, nfqnl_config_mode.NFQNL_COPY_PACKET, 0xffff) >= 0,
+        "nfq_set_mode failed");
+
     scope (exit)
-        close(fd);
-
-    if (fd < 0)
     {
-        stderr.writeln("Error opening /dev/net/tun: ", errno);
-        return 1;
+        nfq_unbind_pf(h, AF_INET);
+        nfq_close(h);
     }
 
-    ifreq ifr;
-    memset(&ifr, 0, ifreq.sizeof);
-    strncpy(ifr.ifr_name.ptr, cast(const char*)("tun0"), 4);
+    writeln("Listening for packets on NFQUEUE #0...");
+    enum BUF_SIZE = 65_536;
+    char[BUF_SIZE] buf;
 
-    ifr.ifr_flags = IFF_TUN | IFF_NO_PI;
-
-    // Create interface
-    if (ioctl(fd, TUNSETIFF, &ifr) < 0)
-    {
-        stderr.writeln("ioctl TUNSETIFF failed: ", errno);
-        close(fd);
-        return 1;
-    }
-
-    writeln("Created TUN device: ", cast(string) ifr.ifr_name);
-
-    // Bring up interface and redirect traffic
-    auto resultUp = executeShell("ip link set tun0 up");
-    auto resultRouteAdd = executeShell("ip route add default dev tun0");
-
-    if (resultUp.status != 0 || resultRouteAdd.status != 0)
-    {
-        stderr.writeln("Failed to bring up interface or add route.");
-        return 1;
-    }
-
-    writeln("Routing traffic through tun0...");
-
-    ubyte[2000] buffer;
     while (true)
     {
-        auto nread = read(fd, buffer.ptr, buffer.length);
-        if (nread < 0)
-        {
-            if (errno != EINTR)
-            {
-                writeln("Error reading packet: ", errno);
-                break;
-            }
-        }
-        else
-        {
-            writeln("Read ", nread, " bytes from TUN device");
-        }
+        auto fd = nfq_fd(h);
+        auto len = recv(fd, buf.ptr, BUF_SIZE, 0);
+        if (len > 0)
+            nfq_handle_packet(h, buf.ptr, cast(uint) len);
     }
+}
 
-    // Revert routing changes and clean up
-    executeShell("ip route del default dev tun0");
-    executeShell("ip link set tun0 down");
+int main(string[] args)
+{
+    ensureRoot();
+
+    // TODO: Load & parse an EasyList-style blocklist
+    // TODO: Add logging, privileged-to-unprivileged drop
+    // TODO: Config flags
+
+    switch (parseArgs(args))
+    {
+    case Actions.Start:
+        setupNftables();
+        startListenerLoop();
+        break;
+    case Actions.Stop:
+        teardownNftables();
+        writeln("Stopped and cleaned up.");
+        break;
+    default:
+        writef("Usage: %s {start|stop}\n", args[0]);
+        return 1;
+    }
 
     return 0;
 }
