@@ -91,10 +91,13 @@ Actions parseArgs(string[] args)
 
 extern (C) int packetCallback(nfq_q_handle* qh, void* nfmsg, nfq_data* nfdata, void* _)
 {
-    ubyte[] payload = extractPayload(nfdata);
-    // TODO: Apply filter logic
+    ubyte[] packet = extractPayload(nfdata);
+    IIPHeader hdr = parseIPHeader(packet);
     int id = extractPacketId(nfdata);
-    writeln(id);
+
+    // TODO: Log only when rejected or --verbose
+    // TODO: Add --verbose option
+    logIPHeader(hdr);
 
     auto v = nfq_set_verdict(qh, id, NF_ACCEPT, 0, null);
     if (v < 0)
