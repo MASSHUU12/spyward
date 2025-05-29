@@ -1,0 +1,18 @@
+services:
+  main:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: utun:latest
+    command: bash
+    volumes:
+      - .:/app:delegated
+    networks:
+      - app-network
+    privileged: true
+    tty: true
+    stdin_open: true
+
+networks:
+  app-network:
+    driver: bridge
