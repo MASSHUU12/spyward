@@ -3,5 +3,6 @@
   "copyright": "Copyright © 2025, masshuu",
   "description": "A minimal D application.",
   "license": "MIT",
-  "name": "utun"
+  "name": "utun",
+  "lflags-linux": ["-lnetfilter_queue"]
 }
