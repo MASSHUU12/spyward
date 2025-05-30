@@ -1,3 +1,3 @@
-# uTun
+# SpyWard
 
 libnetfilter_queue-devel

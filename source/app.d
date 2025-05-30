@@ -44,6 +44,8 @@ bool runCmd(string cmd)
 void setupNftables()
 {
     // TODO: Handle errors
+    // TODO: Make nftables chain/table/priority configurable
+    // TODO: Check if nft is installed before running commands
 
     // Create the inet table if it doesn't exist
     runCmd("nft list table inet UTUNFILTER 2>/dev/null || " ~
@@ -67,6 +69,7 @@ void setupNftables()
 void teardownNftables()
 {
     // TODO: Handle errors
+    // TODO: Only remove rules/chains we created (don't delete user rules)
 
     // Deleting the table will remove all its chains & rules.
     runCmd("nft delete table inet UTUNFILTER 2>/dev/null");
@@ -97,6 +100,12 @@ extern (C) int packetCallback(nfq_q_handle* qh, void* nfmsg, nfq_data* nfdata, v
 
     // TODO: Log only when rejected or --verbose
     // TODO: Add --verbose option
+    // TODO: Check DNS for source
+    // TODO: Use EasyList to decide if packed should be accepted or rejected
+    // TODO: Allow custom blocklist/allowlist
+    // TODO: Implement statistics (accepted/rejected counts)
+    // TODO: Add unit tests for packetCallback logic
+
     logIPHeader(hdr);
 
     auto v = nfq_set_verdict(qh, id, NF_ACCEPT, 0, null);
@@ -138,6 +147,8 @@ void startListenerLoop()
         auto len = recv(fd, buf.ptr, BUF_SIZE, 0);
         if (len > 0)
             nfq_handle_packet(h, buf.ptr, cast(uint) len);
+        // TODO: Add signal handling for graceful shutdown (SIGINT/SIGTERM)
+        // TODO: Add timeout or error handling for recv
     }
 }
 
@@ -148,6 +159,11 @@ int main(string[] args)
     // TODO: Load & parse an EasyList-style blocklist
     // TODO: Add logging, privileged-to-unprivileged drop
     // TODO: Config flags
+    // TODO: Add version and help flags
+    // TODO: Allow running as a daemon/service
+    // TODO: Add config file support
+    // TODO: Validate system dependencies (nft, nfqueue, permissions)
+    // TODO: Self-test and diagnostics mode
 
     switch (parseArgs(args))
     {
@@ -161,6 +177,7 @@ int main(string[] args)
         break;
     default:
         writef("Usage: %s {start|stop}\n", args[0]);
+        // TODO: Print more detailed usage instructions
         return 1;
     }
 
