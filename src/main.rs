@@ -7,14 +7,15 @@ include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
 mod cli;
 mod errors;
 mod ip;
+mod nftables;
 
 use clap::Parser;
 use cli::{Action, Cli};
 use errors::SpyWardError;
 use libc::AF_INET;
+use nftables::NftManager;
 use std::io::{self, Write};
 use std::os::raw::{c_char, c_int, c_void};
-use std::process::Command;
 use std::ptr;
 use std::{env, slice};
 
@@ -60,64 +61,6 @@ fn ensure_root() -> Result<(), SpyWardError> {
     } else {
         Ok(())
     }
-}
-
-fn run_cmd(cmd: &str) -> bool {
-    let status = Command::new("sh").arg("-c").arg(cmd).status();
-
-    match status {
-        Ok(s) if s.success() => true,
-        Ok(s) => {
-            let _ = writeln!(
-                io::stderr(),
-                "`{}` failed (exit {})",
-                cmd,
-                s.code().unwrap_or(-1)
-            );
-            false
-        }
-        Err(e) => {
-            let _ = writeln!(io::stderr(), "`{}` failed: {}", cmd, e);
-            false
-        }
-    }
-}
-
-fn setup_nftables() {
-    // TODO: Handle errors
-    // TODO: Make nftables chain/table/priority configurable
-    // TODO: Check if nft is installed before running commands
-
-    // Create the inet table if it doesn't exist
-    run_cmd(
-        "nft list table inet UTUNFILTER 2>/dev/null || \
-         nft add table inet UTUNFILTER",
-    );
-
-    // Create/verify input/output chains
-    run_cmd(
-        "nft list chain inet UTUNFILTER input 2>/dev/null || \
-         nft add chain inet UTUNFILTER input \
-         { type filter hook input priority 0 \\; policy accept \\; }",
-    );
-    run_cmd(
-        "nft list chain inet UTUNFILTER output 2>/dev/null || \
-         nft add chain inet UTUNFILTER output \
-         { type filter hook output priority 0 \\; policy accept \\; }",
-    );
-
-    // Flush + queue rules
-    run_cmd("nft flush chain inet UTUNFILTER input");
-    run_cmd("nft flush chain inet UTUNFILTER output");
-    run_cmd("nft add rule inet UTUNFILTER input queue num 0");
-    run_cmd("nft add rule inet UTUNFILTER output queue num 0");
-}
-
-fn teardown_nftables() {
-    // TODO: Handle errors
-    // TODO: Only remove rules/chains we created (don't delete user rules)
-
-    run_cmd("nft delete table inet UTUNFILTER 2>/dev/null");
 }
 
 unsafe extern "C" fn packet_callback(
@@ -196,6 +139,7 @@ fn start_listener_loop() {
 
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
+    let manager = NftManager::new();
 
     ensure_root()?;
 
@@ -210,11 +154,11 @@ fn main() -> anyhow::Result<()> {
 
     match cli.action {
         Action::Start => {
-            setup_nftables();
+            manager.setup()?;
             start_listener_loop();
         }
         Action::Stop => {
-            teardown_nftables();
+            manager.teardown()?;
             println!("Stopped and cleaned up.");
         }
     }
