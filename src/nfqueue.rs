@@ -15,6 +15,9 @@ use std::io::{self, Write};
 use std::os::raw::{c_char, c_int};
 use std::ptr;
 use std::slice;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
+use std::sync::Arc;
 
 extern crate libc;
 
@@ -24,6 +27,7 @@ pub struct NfQueue {
     handle: *mut nfq_handle,
     /// The raw nfq_q_handle pointer associated to queue #0.
     q_handle: *mut nfq_q_handle,
+    cleaned_up: bool,
 }
 
 impl NfQueue {
@@ -36,12 +40,17 @@ impl NfQueue {
 
         let bind_res = unsafe { nfq_bind_pf(handle, AF_INET as u16) };
         if bind_res < 0 {
+            unsafe { nfq_close(handle) };
             return Err(SpyWardError::Nfqueue(bind_res));
         }
 
         let q_handle =
             unsafe { nfq_create_queue(handle, 0, Some(Self::packet_callback), ptr::null_mut()) };
         if q_handle.is_null() {
+            unsafe {
+                nfq_unbind_pf(handle, AF_INET as u16);
+                nfq_close(handle);
+            }
             return Err(SpyWardError::InitFailed(
                 "nfq_create_queue returned null".into(),
             ));
@@ -49,48 +58,123 @@ impl NfQueue {
 
         let setmode_res = unsafe { nfq_set_mode(q_handle, NFQNL_COPY_PACKET as u8, 0xffff) };
         if setmode_res < 0 {
+            unsafe {
+                nfq_destroy_queue(q_handle);
+                nfq_unbind_pf(handle, AF_INET as u16);
+                nfq_close(handle);
+            }
             return Err(SpyWardError::Nfqueue(setmode_res));
         }
 
-        Ok(Self { handle, q_handle })
+        Ok(Self {
+            handle,
+            q_handle,
+            cleaned_up: false,
+        })
     }
 
-    /// Start the blocking packet loop. This will run until the process is killed.
-    pub fn run(&self) -> Result<(), SpyWardError> {
-        const BUF_SIZE: usize = 65_536;
-        let mut buf = vec![0_u8; BUF_SIZE];
+    /// Unbinds/destroys the queue and closes everything.
+    /// After this returns, `NfQueue` no longer owns any valid handles.
+    pub fn unbind(&mut self) -> Result<(), SpyWardError> {
+        if self.cleaned_up {
+            return Ok(());
+        }
 
-        println!("Listening for packets on NFQUEUE #0…");
-
-        // TODO: Add signal handling for graceful shutdown (SIGINT/SIGTERM)
-        // TODO: Unbind and close on shutdown
-        loop {
-            let fd = unsafe { nfq_fd(self.handle) };
-            if fd < 0 {
-                return Err(SpyWardError::Nfqueue(fd));
+        if !self.q_handle.is_null() {
+            let res = unsafe { nfq_destroy_queue(self.q_handle) };
+            if res < 0 {
+                // Still try to continue cleanup, but report an error.
+                eprintln!("warning: nfq_destroy_queue failed: {}", res);
             }
+            self.q_handle = ptr::null_mut();
+        }
 
-            let len = unsafe { recv(fd, buf.as_mut_ptr() as *mut c_void, BUF_SIZE, 0 as c_int) };
-
-            if len < 0 {
-                // If recv was interrupted or failed, bail out.
-                let err = io::Error::last_os_error();
-                return Err(SpyWardError::Io(err));
-            } else if len == 0 {
-                // No data?
-                continue;
-            } else {
-                let handle_res = unsafe {
-                    nfq_handle_packet(self.handle, buf.as_mut_ptr() as *mut c_char, len as c_int)
-                };
-                if handle_res < 0 {
-                    let err = io::Error::last_os_error();
-                    let _ = writeln!(io::stderr(), "nfq_handle_packet failed: {}", err);
-                    return Err(SpyWardError::Io(err));
-                }
+        // Unbind the protocol family (AF_INET) from the main handle
+        if !self.handle.is_null() {
+            let res = unsafe { nfq_unbind_pf(self.handle, AF_INET as u16) };
+            if res < 0 {
+                eprintln!("warning: nfq_unbind_pf failed: {}", res);
             }
         }
-        // Note: never return Ok(()) because this loop runs indefinitely.
+
+        if !self.handle.is_null() {
+            unsafe { nfq_close(self.handle) };
+            self.handle = ptr::null_mut();
+        }
+
+        self.cleaned_up = true;
+        Ok(())
+    }
+
+    /// Start the blocking packet loop. This will run until the is_shutting_down is flipped.
+    pub fn run_until_shutdown(&self, shutdown_flag: Arc<AtomicBool>) -> Result<(), SpyWardError> {
+        const BUF_SIZE: usize = 65_536;
+        // TODO: Use fixed-size array or slice and reuse it
+        let mut buf = vec![0_u8; BUF_SIZE];
+
+        println!("Listening for packets on NFQUEUE #0...");
+
+        let raw_fd = unsafe { nfq_fd(self.handle) };
+        if raw_fd < 0 {
+            return Err(SpyWardError::Nfqueue(raw_fd));
+        }
+
+        let mut fds = libc::pollfd {
+            fd: raw_fd,
+            events: libc::POLLIN,
+            revents: 0,
+        };
+
+        loop {
+            let poll_ret = unsafe { libc::poll(&mut fds as *mut libc::pollfd, 1, 200) };
+
+            if poll_ret < 0 {
+                let err = io::Error::last_os_error();
+                if err.kind() == io::ErrorKind::Interrupted {
+                    fds.revents = 0;
+                } else {
+                    return Err(SpyWardError::Io(err));
+                }
+            } else if poll_ret == 0 {
+                // Timeout expired (no events).
+            } else {
+                // poll_ret > 0 means there is data on raw_fd. Check revents:
+                if (fds.revents & libc::POLLIN) != 0 {
+                    let len =
+                        unsafe { recv(raw_fd, buf.as_mut_ptr() as *mut _, BUF_SIZE, 0 as c_int) };
+                    if len < 0 {
+                        let recv_err = io::Error::last_os_error();
+                        if recv_err.kind() == io::ErrorKind::Interrupted {
+                            // The recv itself was interrupted by the signal.
+                        } else {
+                            // Some other recv error is fatal
+                            return Err(SpyWardError::Io(recv_err));
+                        }
+                    } else if len > 0 {
+                        let handle_res = unsafe {
+                            nfq_handle_packet(
+                                self.handle,
+                                buf.as_mut_ptr() as *mut c_char,
+                                len as c_int,
+                            )
+                        };
+                        if handle_res < 0 {
+                            let hf_err = io::Error::last_os_error();
+                            let _ = writeln!(io::stderr(), "nfq_handle_packet failed: {}", hf_err);
+                            return Err(SpyWardError::Io(hf_err));
+                        }
+                    }
+                }
+                fds.revents = 0;
+            }
+
+            if shutdown_flag.load(Ordering::SeqCst) {
+                println!("Exiting packet loop.");
+                break;
+            }
+        }
+
+        Ok(())
     }
 
     unsafe fn extract_packet_id(data: *mut nfq_data) -> u32 {
@@ -123,7 +207,7 @@ impl NfQueue {
         let pkt_id = Self::extract_packet_id(nfdata);
 
         // TODO: Log only when rejected or --verbose
-        // TODO: Add --verbose option
+        // TODO: Use --verbose option
         // TODO: Check DNS for source
         // TODO: Use EasyList to decide if packed should be accepted or rejected
         // TODO: Allow custom blocklist/allowlist
@@ -139,5 +223,14 @@ impl NfQueue {
             let _ = writeln!(io::stderr(), "nfq_set_verdict error: {}", err);
         }
         v
+    }
+}
+
+/// Automatically clean up if `unbind()` was not explicitly called.
+impl Drop for NfQueue {
+    fn drop(&mut self) {
+        if !self.cleaned_up {
+            let _ = self.unbind();
+        }
     }
 }

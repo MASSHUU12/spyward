@@ -1,9 +1,3 @@
-#![allow(non_upper_case_globals)]
-#![allow(non_camel_case_types)]
-#![allow(non_snake_case)]
-
-include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
-
 mod cli;
 mod errors;
 mod ip;
@@ -14,7 +8,10 @@ use clap::Parser;
 use cli::{Action, Cli};
 use errors::SpyWardError;
 use nftables::NftManager;
-use std::env;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 
 extern crate libc;
 
@@ -33,6 +30,9 @@ fn main() -> anyhow::Result<()> {
 
     ensure_root()?;
 
+    // TODO: Handle SIGTERM
+    let is_shutting_down = Arc::new(AtomicBool::new(false));
+
     // TODO: Load & parse an EasyList-style blocklist
     // TODO: Add logging, privileged-to-unprivileged drop
     // TODO: Config flags
@@ -45,8 +45,20 @@ fn main() -> anyhow::Result<()> {
     match cli.action {
         Action::Start => {
             manager.setup()?;
-            let queue = nfqueue::NfQueue::open_and_bind()?;
-            queue.run()?;
+            let mut queue = nfqueue::NfQueue::open_and_bind()?;
+
+            {
+                let shutdown_flag = is_shutting_down.clone();
+                ctrlc::set_handler(move || {
+                    eprintln!("SIGINT received; marking shutdown requested.");
+                    shutdown_flag.store(true, Ordering::SeqCst);
+                })
+                .expect("Error installing SIGINT handler");
+            }
+
+            queue.run_until_shutdown(is_shutting_down.clone())?;
+            queue.unbind()?;
+            manager.teardown()?;
         }
         Action::Stop => {
             manager.teardown()?;

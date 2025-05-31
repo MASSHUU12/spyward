@@ -14,4 +14,8 @@ pub struct Cli {
 
     #[arg(short, long)]
     pub verbose: bool,
+
+    // TODO: Default value etc
+    #[arg(short, long, default_value = "./config/config.ini")]
+    pub config: String,
 }
