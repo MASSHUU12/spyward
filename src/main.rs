@@ -4,12 +4,15 @@
 
 include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
 
+mod cli;
 mod ip;
 
+use clap::Parser;
+use cli::{Action, Cli};
 use libc::AF_INET;
 use std::io::{self, Write};
 use std::os::raw::{c_char, c_int, c_void};
-use std::process::{exit, Command};
+use std::process::Command;
 use std::ptr;
 use std::{env, slice};
 
@@ -47,12 +50,6 @@ pub unsafe fn extract_payload(data: *mut nfq_data) -> Vec<u8> {
 
 const NF_ACCEPT: u32 = 1;
 const NFQNL_COPY_PACKET: u8 = 2;
-
-enum Action {
-    Start,
-    Stop,
-    Unknown,
-}
 
 fn ensure_root() {
     unsafe {
@@ -124,15 +121,6 @@ fn teardown_nftables() {
     run_cmd("nft delete table inet UTUNFILTER 2>/dev/null");
 }
 
-fn parse_args(mut args: env::Args) -> Action {
-    args.next();
-    match args.next().as_deref() {
-        Some("start") => Action::Start,
-        Some("stop") => Action::Stop,
-        _ => Action::Unknown,
-    }
-}
-
 unsafe extern "C" fn packet_callback(
     qh: *mut nfq_q_handle,
     nfmsg: *mut nfgenmsg,
@@ -186,7 +174,7 @@ fn start_listener_loop() {
             0
         }
 
-        println!("Listening for packets on NFQUEUE #0…");
+        println!("Listening for packets on NFQUEUE #0...");
         const BUF_SIZE: usize = 65_536;
         let mut buf = vec![0u8; BUF_SIZE];
 
@@ -208,6 +196,8 @@ fn start_listener_loop() {
 }
 
 fn main() {
+    let cli = Cli::parse();
+
     ensure_root();
 
     // TODO: Load & parse an EasyList-style blocklist
@@ -219,7 +209,7 @@ fn main() {
     // TODO: Validate system dependencies (nft, nfqueue, permissions)
     // TODO: Self-test and diagnostics mode
 
-    match parse_args(env::args()) {
+    match cli.action {
         Action::Start => {
             setup_nftables();
             start_listener_loop();
@@ -227,12 +217,6 @@ fn main() {
         Action::Stop => {
             teardown_nftables();
             println!("Stopped and cleaned up.");
-        }
-        Action::Unknown => {
-            let prog = env::args().next().unwrap_or_else(|| "program".into());
-            eprintln!("Usage: {} {{start|stop}}", prog);
-            // TODO: Print more detailed usage instructions
-            exit(1);
         }
     }
 }
