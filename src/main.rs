@@ -5,10 +5,12 @@
 include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
 
 mod cli;
+mod errors;
 mod ip;
 
 use clap::Parser;
 use cli::{Action, Cli};
+use errors::SpyWardError;
 use libc::AF_INET;
 use std::io::{self, Write};
 use std::os::raw::{c_char, c_int, c_void};
@@ -51,15 +53,12 @@ pub unsafe fn extract_payload(data: *mut nfq_data) -> Vec<u8> {
 const NF_ACCEPT: u32 = 1;
 const NFQNL_COPY_PACKET: u8 = 2;
 
-fn ensure_root() {
-    unsafe {
-        if getuid() != 0 {
-            let _ = writeln!(
-                io::stderr(),
-                "ERROR: This program needs to run with administrative privileges."
-            );
-            _exit(1);
-        }
+fn ensure_root() -> Result<(), SpyWardError> {
+    let uid = unsafe { libc::getuid() };
+    if uid != 0 {
+        Err(SpyWardError::NotRoot(uid))
+    } else {
+        Ok(())
     }
 }
 
@@ -195,10 +194,10 @@ fn start_listener_loop() {
     }
 }
 
-fn main() {
+fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
-    ensure_root();
+    ensure_root()?;
 
     // TODO: Load & parse an EasyList-style blocklist
     // TODO: Add logging, privileged-to-unprivileged drop
@@ -219,4 +218,6 @@ fn main() {
             println!("Stopped and cleaned up.");
         }
     }
+
+    Ok(())
 }
