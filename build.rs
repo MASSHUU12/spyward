@@ -13,6 +13,9 @@ fn main() {
         .allowlist_var("NFQ_.*")
         .derive_debug(true)
         .derive_default(true);
+    // .raw_line("#![allow(non_snake_case)]")
+    // .raw_line("#![allow(non_camel_case_types)]")
+    // .raw_line("#![allow(non_upper_case_globals)]");
 
     // Pass along any include paths pkg-config discovered:
     for include_path in libs.include_paths {
