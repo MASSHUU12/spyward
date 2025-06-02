@@ -1,15 +1,8 @@
-#![allow(non_upper_case_globals)]
-#![allow(non_camel_case_types)]
-#![allow(non_snake_case)]
-
-include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
-
+use crate::bindings::*;
 use crate::errors::SpyWardError;
-use crate::ip;
 use libc::recv;
 use libc::AF_INET;
 use libc::NFQNL_COPY_PACKET;
-use libc::NF_ACCEPT;
 use std::ffi::c_void;
 use std::io::{self, Write};
 use std::os::raw::{c_char, c_int};
@@ -20,6 +13,13 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 extern crate libc;
+
+pub type NfQueueCallback = unsafe extern "C" fn(
+    qh: *mut nfq_q_handle,
+    nfmsg: *mut nfgenmsg,
+    nfdata: *mut nfq_data,
+    data: *mut c_void,
+) -> c_int;
 
 /// Represents an open NFQUEUE “session” with one queue #0.
 pub struct NfQueue {
@@ -32,7 +32,7 @@ pub struct NfQueue {
 
 impl NfQueue {
     /// Open, bind, and create queue 0 with `packet_callback`.
-    pub fn open_and_bind() -> Result<Self, SpyWardError> {
+    pub fn open_and_bind(callback: NfQueueCallback) -> Result<Self, SpyWardError> {
         let handle = unsafe { nfq_open() };
         if handle.is_null() {
             return Err(SpyWardError::InitFailed("nfq_open returned null".into()));
@@ -44,8 +44,7 @@ impl NfQueue {
             return Err(SpyWardError::Nfqueue(bind_res));
         }
 
-        let q_handle =
-            unsafe { nfq_create_queue(handle, 0, Some(Self::packet_callback), ptr::null_mut()) };
+        let q_handle = unsafe { nfq_create_queue(handle, 0, Some(callback), ptr::null_mut()) };
         if q_handle.is_null() {
             unsafe {
                 nfq_unbind_pf(handle, AF_INET as u16);
@@ -177,7 +176,7 @@ impl NfQueue {
         Ok(())
     }
 
-    unsafe fn extract_packet_id(data: *mut nfq_data) -> u32 {
+    pub unsafe fn extract_packet_id(data: *mut nfq_data) -> u32 {
         let ph = nfq_get_msg_packet_hdr(data);
         if ph.is_null() {
             0
@@ -186,7 +185,7 @@ impl NfQueue {
         }
     }
 
-    unsafe fn extract_payload(data: *mut nfq_data) -> Vec<u8> {
+    pub unsafe fn extract_payload(data: *mut nfq_data) -> Vec<u8> {
         let mut payload_ptr: *mut u8 = ptr::null_mut();
         let len = nfq_get_payload(data, &mut payload_ptr);
         if len <= 0 || payload_ptr.is_null() {
@@ -195,34 +194,6 @@ impl NfQueue {
             let slice = slice::from_raw_parts(payload_ptr, len as usize);
             slice.to_vec()
         }
-    }
-
-    unsafe extern "C" fn packet_callback(
-        qh: *mut nfq_q_handle,
-        _nfmsg: *mut nfgenmsg,
-        nfdata: *mut nfq_data,
-        _data: *mut c_void,
-    ) -> c_int {
-        let packet_bytes = Self::extract_payload(nfdata);
-        let pkt_id = Self::extract_packet_id(nfdata);
-
-        // TODO: Log only when rejected or --verbose
-        // TODO: Use --verbose option
-        // TODO: Check DNS for source
-        // TODO: Use EasyList to decide if packed should be accepted or rejected
-        // TODO: Allow custom blocklist/allowlist
-        // TODO: Implement statistics (accepted/rejected counts)
-        // TODO: Add unit tests for packetCallback logic
-
-        let hdr = ip::parse_ip_header(&packet_bytes);
-        ip::log_ip_header(&*hdr);
-
-        let v = nfq_set_verdict(qh, pkt_id, NF_ACCEPT as u32, 0, ptr::null());
-        if v < 0 {
-            let err = io::Error::last_os_error();
-            let _ = writeln!(io::stderr(), "nfq_set_verdict error: {}", err);
-        }
-        v
     }
 }
 
