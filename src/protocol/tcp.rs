@@ -1,4 +1,7 @@
-use std::collections::BTreeMap;
+use std::{
+    collections::BTreeMap,
+    time::{Duration, Instant},
+};
 
 #[repr(C)]
 #[derive(Debug)]
@@ -79,22 +82,53 @@ pub struct TCPReassemblyBuffer {
     assembled: Vec<u8>,
     /// Out–of–order segments waiting for their turn.
     pending: BTreeMap<u32, Vec<u8>>,
+
+    /// Timestamp when this buffer was first created (first segment).
+    first_seen: Instant,
+    /// Timestamp when we saw the last segment.
+    last_seen: Instant,
+
+    /// Whether we've already extracted or inspected an HTTP header in this direction.
+    pub http_done: bool,
+    /// Whether we've already extracted or inspected TLS ClientHello SNI in this direction.
+    pub tls_done: bool,
 }
 
 impl TCPReassemblyBuffer {
-    pub fn new(initial_seq: u32) -> Self {
+    /// Creates a new reassembly buffer, initializing `next_seq` to `initial_seq`.
+    pub fn with_timestamps(initial_seq: u32) -> Self {
+        let now = Instant::now();
         TCPReassemblyBuffer {
             next_seq: initial_seq,
             assembled: Vec::new(),
             pending: BTreeMap::new(),
+            first_seen: now,
+            last_seen: now,
+            http_done: false,
+            tls_done: false,
         }
+    }
+
+    /// Convenience alias for `with_timestamps(...)`.
+    pub fn new(initial_seq: u32) -> Self {
+        TCPReassemblyBuffer::with_timestamps(initial_seq)
     }
 
     /// Pushes a TCP segment into the buffer.
     ///
-    /// Returns a slice of *all* assembled bytes (from initial_seq up to
-    /// the highest contiguous byte) so far.
+    /// This method:
+    /// 1. Drops any data that is already before `next_seq`.
+    /// 2. Trims leading overlap if `seq < next_seq`.
+    /// 3. Stores remaining bytes in `pending`.
+    /// 4. Continuously drains any contiguous segments at the front of `pending`, appending
+    ///    them to `assembled` and advancing `next_seq`.
+    ///
+    /// Returns a slice of *all* assembled bytes so far (from the initial sequence number up to
+    /// the highest contiguous byte).
     pub fn push_segment(&mut self, seq: u32, data: &[u8]) -> &[u8] {
+        // Update last_seen whenever we receive a segment.
+        self.last_seen = Instant::now();
+
         // Ignore data we've already consumed
         if seq + data.len() as u32 <= self.next_seq {
             return &self.assembled;
@@ -122,5 +156,98 @@ impl TCPReassemblyBuffer {
         }
 
         &self.assembled
+    }
+
+    /// Attempts to find the end of an HTTP header (`\r\n\r\n`) in the assembled buffer.
+    ///
+    /// Returns `Some(header_length)` if a double-CRLF is found, where `header_length`
+    /// is the index immediately after `\r\n\r\n` (i.e., the byte-offset where the HTTP
+    /// "body" would begin). Returns `None` if the header terminator is not yet present.
+    pub fn find_header_end(&self) -> Option<usize> {
+        // Search for the byte sequence [0x0D,0x0A, 0x0D,0x0A].
+        // We only need to scan in `assembled`, since that is the full contiguous data so far.
+        let haystack = &self.assembled;
+        if haystack.len() < 4 {
+            return None;
+        }
+        for i in 0..=(haystack.len() - 4) {
+            if &haystack[i..i + 4] == b"\r\n\r\n" {
+                return Some(i + 4);
+            }
+        }
+        None
+    }
+
+    /// Returns how long it has been since we last saw any segment for this buffer.
+    pub fn age(&self) -> Duration {
+        Instant::now().saturating_duration_since(self.last_seen)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_simple_reassembly_in_order() {
+        let mut buf = TCPReassemblyBuffer::new(1000);
+        let r1 = buf.push_segment(1000, b"Hello");
+        assert_eq!(r1, b"Hello");
+        let r2 = buf.push_segment(1005, b", world");
+        assert_eq!(r2, b"Hello, world");
+    }
+
+    #[test]
+    fn test_reassembly_out_of_order() {
+        let mut buf = TCPReassemblyBuffer::new(1000);
+        // Out-of-order: seq=1005, data=", world"
+        let r1 = buf.push_segment(1005, b", world");
+        assert_eq!(r1, b""); // nothing contiguous yet
+                             // Now the first part: seq=1000, data="Hello"
+        let r2 = buf.push_segment(1000, b"Hello");
+        assert_eq!(r2, b"Hello, world");
+    }
+
+    #[test]
+    fn test_overlap_segments() {
+        let mut buf = TCPReassemblyBuffer::new(1000);
+        // First: seq=1000, data="ABCDEFGHIJ" (10 bytes)
+        let r1 = buf.push_segment(1000, b"ABCDEFGHIJ");
+        assert_eq!(r1, b"ABCDEFGHIJ");
+        // Overlapping segment: seq=1005, data="FGHIJKLMNOP"
+        let r2 = buf.push_segment(1005, b"FGHIJKLMNOP");
+        assert_eq!(r2, b"ABCDEFGHIJKLMNOP");
+    }
+
+    #[test]
+    fn test_find_header_end_not_found() {
+        let mut buf = TCPReassemblyBuffer::new(0);
+        buf.assembled
+            .extend_from_slice(b"GET / HTTP/1.1\r\nHost: example.com\r\n");
+        assert_eq!(buf.find_header_end(), None);
+    }
+
+    #[test]
+    fn test_find_header_end_found() {
+        let mut buf = TCPReassemblyBuffer::new(0);
+        buf.assembled
+            .extend_from_slice(b"GET / HTTP/1.1\r\nHost: example.com\r\n\r\nBODY");
+        assert_eq!(
+            buf.find_header_end(),
+            Some((b"GET / HTTP/1.1\r\nHost: example.com\r\n\r\n").len())
+        );
+    }
+
+    #[test]
+    fn test_timestamps_and_age() {
+        let mut buf = TCPReassemblyBuffer::new(0);
+        // Immediately after creation, age should be very small.
+        assert!(buf.age() < Duration::from_millis(10));
+
+        // Simulate waiting by manually stepping the timestamp.
+        let before = buf.last_seen;
+        std::thread::sleep(Duration::from_millis(5));
+        buf.push_segment(0, b"A");
+        assert!(buf.last_seen > before);
     }
 }
