@@ -1,10 +1,13 @@
+mod bindings;
 mod cli;
 mod errors;
 mod ip;
 mod nfqueue;
 mod nftables;
+mod packet_inspection;
 mod protocol;
 
+use crate::packet_inspection::packet_inspection;
 use clap::Parser;
 use cli::{Action, Cli};
 use errors::SpyWardError;
@@ -46,7 +49,7 @@ fn main() -> anyhow::Result<()> {
     match cli.action {
         Action::Start => {
             manager.setup()?;
-            let mut queue = nfqueue::NfQueue::open_and_bind()?;
+            let mut queue = nfqueue::NfQueue::open_and_bind(packet_inspection)?;
 
             {
                 let shutdown_flag = is_shutting_down.clone();
