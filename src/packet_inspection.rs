@@ -5,15 +5,23 @@ use crate::nfqueue::NfQueue;
 use crate::protocol::http::HTTPRequest;
 use crate::protocol::http::HTTPResponse;
 use crate::protocol::icmp::ICMPHeader;
+use crate::protocol::tcp::TCPConnectionKey;
 use crate::protocol::tcp::TCPHeader;
+use crate::protocol::tcp::TCPReassemblyBuffer;
 use crate::protocol::udp::UDPHeader;
 use libc::NF_ACCEPT;
+use once_cell::sync::Lazy;
+use std::collections::HashMap;
 use std::ffi::c_void;
 use std::io::{self, Write};
 use std::os::raw::c_int;
 use std::ptr;
+use std::sync::Mutex;
 
 extern crate libc;
+
+static REASSEMBLY_TABLE: Lazy<Mutex<HashMap<TCPConnectionKey, TCPReassemblyBuffer>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
 
 pub unsafe extern "C" fn packet_inspection(
     qh: *mut nfq_q_handle,
@@ -42,34 +50,45 @@ pub unsafe extern "C" fn packet_inspection(
     // }
 
     match hdr.packet_protocol() {
-        // TODO: Handle TCP segmentation
         // TODO: Handle HTTPS
         IPProtocol::TCP => 'tcp: {
             let tcp_hdr = TCPHeader::parse(buf);
             let payload = &buf[tcp_hdr.header_length()..];
 
-            println!("{:?}", tcp_hdr);
+            // println!("{:?}", tcp_hdr);
 
-            if payload.len() <= 0 {
-                break 'tcp;
-            }
+            if !payload.is_empty() {
+                let key = TCPConnectionKey::new(
+                    hdr.source_as_string(),
+                    hdr.destination_as_string(),
+                    tcp_hdr.source_port,
+                    tcp_hdr.dest_port,
+                );
 
-            println!("{:?}", payload);
+                let mut table = REASSEMBLY_TABLE.lock().unwrap();
+                let entry = table
+                    .entry(key)
+                    .or_insert_with(|| TCPReassemblyBuffer::new(tcp_hdr.seq_number));
 
-            if HTTPRequest::is_request(payload) {
-                let http = HTTPRequest::parse(payload);
+                let contiguous = entry.push_segment(tcp_hdr.seq_number, payload);
 
-                println!("{:?}", http);
+                if !contiguous.is_empty() {
+                    if HTTPRequest::is_request(contiguous) {
+                        let http = HTTPRequest::parse(contiguous);
 
-                break 'tcp;
-            }
+                        println!("{:?}", http);
 
-            if HTTPResponse::is_response(payload) {
-                let http = HTTPResponse::parse(payload);
+                        break 'tcp;
+                    }
 
-                println!("{:?}", http);
+                    if HTTPResponse::is_response(contiguous) {
+                        let http = HTTPResponse::parse(contiguous);
 
-                break 'tcp;
+                        println!("{:?}", http);
+
+                        break 'tcp;
+                    }
+                }
             }
         }
         IPProtocol::ICMP => {
