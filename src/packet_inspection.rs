@@ -17,9 +17,12 @@ use std::io::{self, Write};
 use std::os::raw::c_int;
 use std::ptr;
 use std::sync::Mutex;
+use tls_parser::{parse_tls_plaintext, TlsExtension, TlsMessage};
 
 extern crate libc;
 
+// TODO: Use DashMap instead of locking HasMap
+// TODO: Evict old buffers
 static REASSEMBLY_TABLE: Lazy<Mutex<HashMap<TCPConnectionKey, TCPReassemblyBuffer>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 
@@ -43,11 +46,6 @@ pub unsafe extern "C" fn packet_inspection(
     let hdr = ip::parse_ip_header(&packet_bytes);
     let buf = &packet_bytes[hdr.header_length() as usize..];
     // ip::log_ip_header(&*hdr);
-
-    // match hdr.as_any() {
-    //     IP4Header => {}
-    //     IP6Header => {}
-    // }
 
     match hdr.packet_protocol() {
         // TODO: Handle HTTPS
@@ -73,6 +71,32 @@ pub unsafe extern "C" fn packet_inspection(
                 let contiguous = entry.push_segment(tcp_hdr.seq_number, payload);
 
                 if !contiguous.is_empty() {
+                    if tcp_hdr.dest_port == 443 || tcp_hdr.source_port == 443 {
+                        if let Ok((_, records)) = parse_tls_plaintext(contiguous) {
+                            for record in records.msg {
+                                if let TlsMessage::Handshake(handshake) = record {
+                                    if let tls_parser::TlsMessageHandshake::ClientHello(ch) =
+                                        handshake
+                                    {
+                                        if let Some(exts_bytes) = ch.ext {
+                                            let (_, exts) =
+                                                tls_parser::parse_tls_extensions(exts_bytes)
+                                                    .unwrap();
+                                            for ext in exts {
+                                                if let TlsExtension::SNI(server_name_list) = ext {
+                                                    for srv in server_name_list {
+                                                        println!("TLS SNI: {:?}", srv);
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        break 'tcp;
+                    }
+
                     if HTTPRequest::is_request(contiguous) {
                         let http = HTTPRequest::parse(contiguous);
 
