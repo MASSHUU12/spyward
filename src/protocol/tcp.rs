@@ -16,7 +16,7 @@ pub struct TCPHeader {
 impl TCPHeader {
     /// Parses a TCP header from the given buffer.
     /// Ensure that `buf` is at least 20 bytes.
-    pub fn parse_tcp_header(buf: &[u8]) -> Self {
+    pub fn parse(buf: &[u8]) -> Self {
         assert!(buf.len() >= 20, "Buffer too small for TCP header");
 
         let source_port = u16::from_be_bytes([buf[0], buf[1]]);

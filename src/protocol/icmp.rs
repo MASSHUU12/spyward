@@ -12,7 +12,7 @@ pub struct ICMPHeader {
 impl ICMPHeader {
     /// Parses an ICMP header from the given buffer.
     /// The fields after the first 4 bytes may differ in format based on ICMP message type.
-    pub fn parse_icmp_header(buf: &[u8]) -> Self {
+    pub fn parse(buf: &[u8]) -> Self {
         assert!(buf.len() >= 8, "Buffer too small for ICMP header");
 
         let icmp_type = buf[0];

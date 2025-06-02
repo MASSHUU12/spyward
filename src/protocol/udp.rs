@@ -11,7 +11,7 @@ pub struct UDPHeader {
 impl UDPHeader {
     /// Parses a UDP header from the given buffer.
     /// Ensure that `buf` is at least 8 bytes.
-    pub fn parse_udp_header(buf: &[u8]) -> Self {
+    pub fn parse(buf: &[u8]) -> Self {
         assert!(buf.len() >= 8, "Buffer too small for UDP header");
 
         let source_port = u16::from_be_bytes([buf[0], buf[1]]);
