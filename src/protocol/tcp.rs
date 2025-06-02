@@ -1,6 +1,6 @@
 #[repr(C)]
 #[derive(Debug)]
-/// https://networklessons.com/ip-routing/tcp-header
+/// https://en.wikipedia.org/wiki/Transmission_Control_Protocol
 pub struct TCPHeader {
     pub source_port: u16,
     pub dest_port: u16,
@@ -44,5 +44,9 @@ impl TCPHeader {
             checksum,
             urgent_ptr,
         }
+    }
+
+    pub fn header_length(&self) -> usize {
+        (self.data_offset as usize) * 4
     }
 }

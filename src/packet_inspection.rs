@@ -2,6 +2,8 @@ use crate::bindings::*;
 use crate::ip;
 use crate::ip::IPProtocol;
 use crate::nfqueue::NfQueue;
+use crate::protocol::http::HTTPRequest;
+use crate::protocol::http::HTTPResponse;
 use crate::protocol::icmp::ICMPHeader;
 use crate::protocol::tcp::TCPHeader;
 use crate::protocol::udp::UDPHeader;
@@ -40,20 +42,43 @@ pub unsafe extern "C" fn packet_inspection(
     // }
 
     match hdr.packet_protocol() {
-        IPProtocol::TCP => {
-            let tcp_hdr = TCPHeader::parse_tcp_header(buf);
+        // TODO: Handle TCP segmentation
+        // TODO: Handle HTTPS
+        IPProtocol::TCP => 'tcp: {
+            let tcp_hdr = TCPHeader::parse(buf);
+            let payload = &buf[tcp_hdr.header_length()..];
 
             println!("{:?}", tcp_hdr);
 
-            // TODO: Parse HTTP requests
+            if payload.len() <= 0 {
+                break 'tcp;
+            }
+
+            println!("{:?}", payload);
+
+            if HTTPRequest::is_request(payload) {
+                let http = HTTPRequest::parse(payload);
+
+                println!("{:?}", http);
+
+                break 'tcp;
+            }
+
+            if HTTPResponse::is_response(payload) {
+                let http = HTTPResponse::parse(payload);
+
+                println!("{:?}", http);
+
+                break 'tcp;
+            }
         }
         IPProtocol::ICMP => {
-            let icmp_hdr = ICMPHeader::parse_icmp_header(buf);
+            let icmp_hdr = ICMPHeader::parse(buf);
 
             println!("{:?}", icmp_hdr);
         }
         IPProtocol::UDP => {
-            let udp_hdr = UDPHeader::parse_udp_header(buf);
+            let udp_hdr = UDPHeader::parse(buf);
 
             // TODO: Parse HTTP/3
 
