@@ -8,6 +8,8 @@ use crate::errors::SpyWardError;
 use crate::ip;
 use crate::ip::IP4Header;
 use crate::ip::IP6Header;
+use crate::ip::IPProtocol;
+use crate::tcp::TCPHeader;
 use libc::recv;
 use libc::AF_INET;
 use libc::NFQNL_COPY_PACKET;
@@ -215,17 +217,40 @@ impl NfQueue {
         // TODO: Allow custom blocklist/allowlist
         // TODO: Implement statistics (accepted/rejected counts)
         // TODO: Add unit tests for packetCallback logic
-        // TODO: Parse packet info
 
         let hdr = ip::parse_ip_header(&packet_bytes);
-        ip::log_ip_header(&*hdr);
+        let buf = &packet_bytes[hdr.header_length() as usize..];
+        // ip::log_ip_header(&*hdr);
 
         // match hdr.as_any() {
         //     IP4Header => {}
         //     IP6Header => {}
         // }
 
-        println!("{}", hdr.packet_protocol() as u8);
+        // TODO: Handle HTTP requests
+        match hdr.packet_protocol() {
+            IPProtocol::TCP => {
+                let tcp_hdr = TCPHeader::parse_tcp_header(buf);
+
+                println!("{:?}", tcp_hdr);
+            }
+            IPProtocol::ICMP => {
+                // TODO
+                println!("ICMP");
+            }
+            IPProtocol::UDP => {
+                // TODO
+                println!("UDP");
+            }
+            IPProtocol::RDP => unimplemented!(),
+            IPProtocol::IPV6 => unimplemented!(),
+            IPProtocol::IPV6ROUTE => unimplemented!(),
+            IPProtocol::IPV6FRAG => unimplemented!(),
+            IPProtocol::TLSP => unimplemented!(),
+            IPProtocol::IPV6ICMP => unimplemented!(),
+            IPProtocol::IPV6NONXT => unimplemented!(),
+            IPProtocol::IPV6OPTS => unimplemented!(),
+        }
 
         let v = nfq_set_verdict(qh, pkt_id, NF_ACCEPT as u32, 0, ptr::null());
         if v < 0 {

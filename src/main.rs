@@ -3,6 +3,7 @@ mod errors;
 mod ip;
 mod nfqueue;
 mod nftables;
+mod tcp;
 
 use clap::Parser;
 use cli::{Action, Cli};
