@@ -5,13 +5,11 @@
 include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
 
 use crate::errors::SpyWardError;
-use crate::icmp::ICMPHeader;
 use crate::ip;
-use crate::ip::IP4Header;
-use crate::ip::IP6Header;
 use crate::ip::IPProtocol;
-use crate::tcp::TCPHeader;
-use crate::udp::UDPHeader;
+use crate::protocol::icmp::ICMPHeader;
+use crate::protocol::tcp::TCPHeader;
+use crate::protocol::udp::UDPHeader;
 use libc::recv;
 use libc::AF_INET;
 use libc::NFQNL_COPY_PACKET;

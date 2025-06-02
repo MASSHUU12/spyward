@@ -1,11 +1,9 @@
 mod cli;
 mod errors;
-mod icmp;
 mod ip;
 mod nfqueue;
 mod nftables;
-mod tcp;
-mod udp;
+mod protocol;
 
 use clap::Parser;
 use cli::{Action, Cli};
