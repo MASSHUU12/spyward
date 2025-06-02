@@ -30,6 +30,7 @@ pub trait IIPHeader: Any + fmt::Debug {
     fn destination_as_string(&self) -> String;
 
     fn packet_protocol(&self) -> IPProtocol;
+    fn header_length(&self) -> u8;
 
     /// Required for downcasting
     fn as_any(&self) -> &dyn Any;
@@ -149,12 +150,16 @@ impl IIPHeader for IP4Header {
         Self::ip4_to_string(self.destination_address)
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn packet_protocol(&self) -> IPProtocol {
         unsafe { std::mem::transmute(self.protocol) }
+    }
+
+    fn header_length(&self) -> u8 {
+        self.ihl * 4
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
     }
 }
 
@@ -256,11 +261,15 @@ impl IIPHeader for IP6Header {
         Self::ip6_to_string(&self.destination_address)
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn packet_protocol(&self) -> IPProtocol {
         unsafe { std::mem::transmute(self.next_header) }
+    }
+
+    fn header_length(&self) -> u8 {
+        40
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
     }
 }
