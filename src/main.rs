@@ -1,5 +1,6 @@
 mod cli;
 mod errors;
+mod icmp;
 mod ip;
 mod nfqueue;
 mod nftables;

@@ -5,6 +5,7 @@
 include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
 
 use crate::errors::SpyWardError;
+use crate::icmp::ICMPHeader;
 use crate::ip;
 use crate::ip::IP4Header;
 use crate::ip::IP6Header;
@@ -228,16 +229,18 @@ impl NfQueue {
         //     IP6Header => {}
         // }
 
-        // TODO: Handle HTTP requests
         match hdr.packet_protocol() {
             IPProtocol::TCP => {
                 let tcp_hdr = TCPHeader::parse_tcp_header(buf);
 
                 println!("{:?}", tcp_hdr);
+
+                // TODO: Handle HTTP requests
             }
             IPProtocol::ICMP => {
-                // TODO
-                println!("ICMP");
+                let icmp_hdr = ICMPHeader::parse_icmp_header(buf);
+
+                println!("{:?}", icmp_hdr);
             }
             IPProtocol::UDP => {
                 let udp_hdr = UDPHeader::parse_udp_header(buf);
