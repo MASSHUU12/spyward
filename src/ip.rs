@@ -3,6 +3,7 @@ use std::fmt;
 
 /// https://en.wikipedia.org/wiki/List_of_IP_protocol_numbers
 #[repr(u8)]
+#[derive(Debug)]
 pub enum IPProtocol {
     /// https://en.wikipedia.org/wiki/Internet_Control_Message_Protocol
     ICMP = 1,

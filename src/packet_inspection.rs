@@ -1,5 +1,6 @@
 use crate::bindings::*;
 use crate::ip;
+use crate::ip::IIPHeader;
 use crate::ip::IPProtocol;
 use crate::nfqueue::NfQueue;
 use crate::protocol::http::HTTPRequest;
@@ -47,100 +48,122 @@ pub unsafe extern "C" fn packet_inspection(
     let buf = &packet_bytes[hdr.header_length() as usize..];
     // ip::log_ip_header(&*hdr);
 
-    match hdr.packet_protocol() {
+    let verdict = match hdr.packet_protocol() {
         // TODO: Handle HTTPS
-        IPProtocol::TCP => 'tcp: {
-            let tcp_hdr = TCPHeader::parse(buf);
-            let payload = &buf[tcp_hdr.header_length()..];
+        IPProtocol::TCP => handle_tcp(qh, pkt_id, &hdr, buf),
+        IPProtocol::ICMP => handle_icmp(qh, pkt_id, &hdr, buf),
+        IPProtocol::UDP => handle_udp(qh, pkt_id, &hdr, buf),
+        other => {
+            println!("Unsupported IP protocol: {:?}", other);
+            set_verdict(qh, pkt_id, NF_ACCEPT)
+        }
+    };
 
-            // println!("{:?}", tcp_hdr);
+    verdict
+}
 
-            if !payload.is_empty() {
-                let key = TCPConnectionKey::new(
-                    hdr.source_as_string(),
-                    hdr.destination_as_string(),
-                    tcp_hdr.source_port,
-                    tcp_hdr.dest_port,
-                );
+fn set_verdict(qh: *mut nfq_q_handle, pkt_id: u32, v: c_int) -> c_int {
+    let r = unsafe { nfq_set_verdict(qh, pkt_id, v as u32, 0, ptr::null()) };
+    if r < 0 {
+        let err = io::Error::last_os_error();
+        let _ = writeln!(io::stderr(), "nfq_set_verdict error: {}", err);
+    }
+    r as c_int
+}
 
-                let mut table = REASSEMBLY_TABLE.lock().unwrap();
-                let entry = table
-                    .entry(key)
-                    .or_insert_with(|| TCPReassemblyBuffer::new(tcp_hdr.seq_number));
+fn handle_icmp(
+    qh: *mut nfq_q_handle,
+    pkt_id: u32,
+    _hdr: &Box<dyn IIPHeader>,
+    payload: &[u8],
+) -> c_int {
+    let icmp_hdr = ICMPHeader::parse(payload);
 
-                let contiguous = entry.push_segment(tcp_hdr.seq_number, payload);
+    println!("{:?}", icmp_hdr);
+    set_verdict(qh, pkt_id, NF_ACCEPT)
+}
 
-                if !contiguous.is_empty() {
-                    if tcp_hdr.dest_port == 443 || tcp_hdr.source_port == 443 {
-                        if let Ok((_, records)) = parse_tls_plaintext(contiguous) {
-                            for record in records.msg {
-                                if let TlsMessage::Handshake(handshake) = record {
-                                    if let tls_parser::TlsMessageHandshake::ClientHello(ch) =
-                                        handshake
-                                    {
-                                        if let Some(exts_bytes) = ch.ext {
-                                            let (_, exts) =
-                                                tls_parser::parse_tls_extensions(exts_bytes)
-                                                    .unwrap();
-                                            for ext in exts {
-                                                if let TlsExtension::SNI(server_name_list) = ext {
-                                                    for srv in server_name_list {
-                                                        println!("TLS SNI: {:?}", srv);
-                                                    }
-                                                }
+fn handle_udp(
+    qh: *mut nfq_q_handle,
+    pkt_id: u32,
+    _hdr: &Box<dyn IIPHeader>,
+    payload: &[u8],
+) -> c_int {
+    let udp_hdr = UDPHeader::parse(payload);
+
+    // TODO: Parse HTTP/3
+
+    println!("{:?}", udp_hdr);
+    set_verdict(qh, pkt_id, NF_ACCEPT)
+}
+
+fn handle_tcp(
+    qh: *mut nfq_q_handle,
+    pkt_id: u32,
+    hdr: &Box<dyn IIPHeader>,
+    payload: &[u8],
+) -> c_int {
+    let tcp_hdr = TCPHeader::parse(payload);
+    let payload = &payload[tcp_hdr.header_length()..];
+
+    // println!("{:?}", tcp_hdr);
+
+    if !payload.is_empty() {
+        let key = TCPConnectionKey::new(
+            hdr.source_as_string(),
+            hdr.destination_as_string(),
+            tcp_hdr.source_port,
+            tcp_hdr.dest_port,
+        );
+
+        let mut table = REASSEMBLY_TABLE.lock().unwrap();
+        let entry = table
+            .entry(key)
+            .or_insert_with(|| TCPReassemblyBuffer::new(tcp_hdr.seq_number));
+
+        let contiguous = entry.push_segment(tcp_hdr.seq_number, payload);
+
+        if !contiguous.is_empty() {
+            if tcp_hdr.dest_port == 443 || tcp_hdr.source_port == 443 {
+                if let Ok((_, records)) = parse_tls_plaintext(contiguous) {
+                    for record in records.msg {
+                        if let TlsMessage::Handshake(handshake) = record {
+                            if let tls_parser::TlsMessageHandshake::ClientHello(ch) = handshake {
+                                if let Some(exts_bytes) = ch.ext {
+                                    let (_, exts) =
+                                        tls_parser::parse_tls_extensions(exts_bytes).unwrap();
+                                    for ext in exts {
+                                        if let TlsExtension::SNI(server_name_list) = ext {
+                                            for srv in server_name_list {
+                                                println!("TLS SNI: {:?}", srv);
                                             }
                                         }
                                     }
                                 }
                             }
                         }
-                        break 'tcp;
-                    }
-
-                    if HTTPRequest::is_request(contiguous) {
-                        let http = HTTPRequest::parse(contiguous);
-
-                        println!("{:?}", http);
-
-                        break 'tcp;
-                    }
-
-                    if HTTPResponse::is_response(contiguous) {
-                        let http = HTTPResponse::parse(contiguous);
-
-                        println!("{:?}", http);
-
-                        break 'tcp;
                     }
                 }
+                return set_verdict(qh, pkt_id, NF_ACCEPT);
+            }
+
+            if HTTPRequest::is_request(contiguous) {
+                let http = HTTPRequest::parse(contiguous);
+
+                println!("{:?}", http);
+
+                return set_verdict(qh, pkt_id, NF_ACCEPT);
+            }
+
+            if HTTPResponse::is_response(contiguous) {
+                let http = HTTPResponse::parse(contiguous);
+
+                println!("{:?}", http);
+
+                return set_verdict(qh, pkt_id, NF_ACCEPT);
             }
         }
-        IPProtocol::ICMP => {
-            let icmp_hdr = ICMPHeader::parse(buf);
-
-            println!("{:?}", icmp_hdr);
-        }
-        IPProtocol::UDP => {
-            let udp_hdr = UDPHeader::parse(buf);
-
-            // TODO: Parse HTTP/3
-
-            println!("{:?}", udp_hdr);
-        }
-        IPProtocol::RDP => unimplemented!(),
-        IPProtocol::IPV6 => unimplemented!(),
-        IPProtocol::IPV6ROUTE => unimplemented!(),
-        IPProtocol::IPV6FRAG => unimplemented!(),
-        IPProtocol::TLSP => unimplemented!(),
-        IPProtocol::IPV6ICMP => unimplemented!(),
-        IPProtocol::IPV6NONXT => unimplemented!(),
-        IPProtocol::IPV6OPTS => unimplemented!(),
     }
 
-    let v = nfq_set_verdict(qh, pkt_id, NF_ACCEPT as u32, 0, ptr::null());
-    if v < 0 {
-        let err = io::Error::last_os_error();
-        let _ = writeln!(io::stderr(), "nfq_set_verdict error: {}", err);
-    }
-    v
+    set_verdict(qh, pkt_id, NF_ACCEPT)
 }
