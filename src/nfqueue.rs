@@ -6,6 +6,8 @@ include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
 
 use crate::errors::SpyWardError;
 use crate::ip;
+use crate::ip::IP4Header;
+use crate::ip::IP6Header;
 use libc::recv;
 use libc::AF_INET;
 use libc::NFQNL_COPY_PACKET;
@@ -213,9 +215,17 @@ impl NfQueue {
         // TODO: Allow custom blocklist/allowlist
         // TODO: Implement statistics (accepted/rejected counts)
         // TODO: Add unit tests for packetCallback logic
+        // TODO: Parse packet info
 
         let hdr = ip::parse_ip_header(&packet_bytes);
         ip::log_ip_header(&*hdr);
+
+        // match hdr.as_any() {
+        //     IP4Header => {}
+        //     IP6Header => {}
+        // }
+
+        println!("{}", hdr.packet_protocol() as u8);
 
         let v = nfq_set_verdict(qh, pkt_id, NF_ACCEPT as u32, 0, ptr::null());
         if v < 0 {

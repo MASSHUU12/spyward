@@ -1,6 +1,26 @@
 use std::any::Any;
 use std::fmt;
 
+/// https://en.wikipedia.org/wiki/List_of_IP_protocol_numbers
+#[repr(u8)]
+pub enum IPProtocol {
+    /// https://en.wikipedia.org/wiki/Internet_Control_Message_Protocol
+    ICMP = 1,
+    /// https://en.wikipedia.org/wiki/Transmission_Control_Protocol
+    TCP = 6,
+    /// https://en.wikipedia.org/wiki/User_Datagram_Protocol
+    UDP = 17,
+    RDP = 27,
+    IPV6 = 41,
+    IPV6ROUTE = 43,
+    IPV6FRAG = 44,
+    TLSP = 56,
+    /// https://en.wikipedia.org/wiki/Internet_Control_Message_Protocol
+    IPV6ICMP = 58,
+    IPV6NONXT = 59,
+    IPV6OPTS = 60,
+}
+
 pub trait IIPHeader: Any + fmt::Debug {
     /// Return the version (4 or 6).
     fn version(&self) -> u8;
@@ -8,6 +28,8 @@ pub trait IIPHeader: Any + fmt::Debug {
     /// dotted-decimal or canonical IPv6 representation
     fn source_as_string(&self) -> String;
     fn destination_as_string(&self) -> String;
+
+    fn packet_protocol(&self) -> IPProtocol;
 
     /// Required for downcasting
     fn as_any(&self) -> &dyn Any;
@@ -130,6 +152,10 @@ impl IIPHeader for IP4Header {
     fn as_any(&self) -> &dyn Any {
         self
     }
+
+    fn packet_protocol(&self) -> IPProtocol {
+        unsafe { std::mem::transmute(self.protocol) }
+    }
 }
 
 /// IPv6 header
@@ -232,5 +258,9 @@ impl IIPHeader for IP6Header {
 
     fn as_any(&self) -> &dyn Any {
         self
+    }
+
+    fn packet_protocol(&self) -> IPProtocol {
+        unsafe { std::mem::transmute(self.next_header) }
     }
 }
