@@ -1,5 +1,6 @@
 mod bindings;
 mod cli;
+mod easylist;
 mod errors;
 mod ip;
 mod nfqueue;
