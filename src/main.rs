@@ -4,6 +4,7 @@ mod ip;
 mod nfqueue;
 mod nftables;
 mod tcp;
+mod udp;
 
 use clap::Parser;
 use cli::{Action, Cli};

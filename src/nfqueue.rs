@@ -10,6 +10,7 @@ use crate::ip::IP4Header;
 use crate::ip::IP6Header;
 use crate::ip::IPProtocol;
 use crate::tcp::TCPHeader;
+use crate::udp::UDPHeader;
 use libc::recv;
 use libc::AF_INET;
 use libc::NFQNL_COPY_PACKET;
@@ -239,8 +240,9 @@ impl NfQueue {
                 println!("ICMP");
             }
             IPProtocol::UDP => {
-                // TODO
-                println!("UDP");
+                let udp_hdr = UDPHeader::parse_udp_header(buf);
+
+                println!("{:?}", udp_hdr);
             }
             IPProtocol::RDP => unimplemented!(),
             IPProtocol::IPV6 => unimplemented!(),
