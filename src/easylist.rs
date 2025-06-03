@@ -17,7 +17,6 @@ use nom::{
 use regex::Regex;
 
 // TODO: Use trie or Aho-Corasick automaton for better filter ordering for substring-based rules
-// TODO: Use domain-tree for || rules
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RuleType {
@@ -63,10 +62,10 @@ pub struct FilterRule {
 }
 
 impl FilterRule {
-    fn is_literal(&self) -> bool {
+    pub fn is_literal(&self) -> bool {
         matches!(self.pattern, FilterPattern::Literal(_))
     }
-    fn as_literal(&self) -> Option<&str> {
+    pub fn as_literal(&self) -> Option<&str> {
         if let FilterPattern::Literal(ref s) = self.pattern {
             Some(s)
         } else {
