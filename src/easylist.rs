@@ -505,4 +505,149 @@ mod tests {
         let line = "not a valid filter $$$";
         assert!(parse_line(line).is_none());
     }
+
+    #[test]
+    fn test_network_filter_unknown_option_is_ignored() {
+        // Any option not recognized (e.g. "foo") should not panic,
+        // and should result in an options struct with no resource_types, no domain lists, third_party = None.
+        let line = "||unknown.example^$foo,bar";
+        let rule = parse_network_filter(line).unwrap().1;
+        assert_eq!(rule.rule_type, RuleType::Block);
+        assert_eq!(rule.pattern, "||unknown.example^".to_string());
+        let opts = rule.options.unwrap();
+        assert!(opts.resource_types.is_empty());
+        assert!(opts.domain_includes.is_empty());
+        assert!(opts.domain_excludes.is_empty());
+        assert_eq!(opts.third_party, None);
+    }
+
+    #[test]
+    fn test_network_filter_multiple_domain_excludes_only() {
+        // domain=~a.com|~b.com should put both in domain_excludes
+        let line = "||site.test^$domain=~a.com|~b.com";
+        let rule = parse_network_filter(line).unwrap().1;
+        assert_eq!(rule.pattern, "||site.test^".to_string());
+        let opts = rule.options.unwrap();
+        assert!(opts.domain_includes.is_empty());
+        assert_eq!(opts.domain_excludes.len(), 2);
+        assert!(opts.domain_excludes.contains(&"a.com".to_string()));
+        assert!(opts.domain_excludes.contains(&"b.com".to_string()));
+        assert_eq!(opts.third_party, None);
+    }
+
+    #[test]
+    fn test_network_filter_various_resource_types_including_other_and_stylesheet() {
+        // "other" and "stylesheet" are recognized. Unknown sub-option "redirect" is skipped.
+        let line = "|http://foo.bar^$stylesheet,popup,other,redirect=foo";
+        let rule = parse_network_filter(line).unwrap().1;
+        assert_eq!(rule.pattern, "|http://foo.bar^".to_string());
+        let opts = rule.options.unwrap();
+        assert!(opts.resource_types.contains(&"stylesheet".to_string()));
+        assert!(opts.resource_types.contains(&"popup".to_string()));
+        assert!(opts.resource_types.contains(&"other".to_string()));
+        // "redirect" is not in the resource_types list
+        assert_eq!(opts.domain_includes.len(), 0);
+        assert_eq!(opts.domain_excludes.len(), 0);
+        assert_eq!(opts.third_party, None);
+    }
+
+    #[test]
+    fn test_parse_line_rejects_whitespace_inside_string() {
+        // Any whitespace inside means parse_line -> None
+        assert!(parse_line("ads .example.com").is_none());
+        assert!(parse_line("example.com##banner something").is_none());
+    }
+
+    #[test]
+    fn test_cosmetic_filter_with_no_selector_after_hashes() {
+        // "domain##" with nothing after should yield css_selector = Some(""), not panic
+        let line = "example.com##";
+        let rule = parse_cosmetic_filter(line).unwrap().1;
+        assert_eq!(rule.category, FilterCategory::Cosmetic);
+        assert_eq!(rule.domain_specifier, Some("example.com".to_string()));
+        assert_eq!(rule.css_selector, Some("".to_string()));
+    }
+
+    #[test]
+    fn test_cosmetic_filter_strips_multiple_leading_dots() {
+        // "##...class" -> selector_raw = "...class", trim_start_matches('.') -> "class"
+        let line = "##...class";
+        let rule = parse_cosmetic_filter(line).unwrap().1;
+        assert_eq!(rule.category, FilterCategory::Cosmetic);
+        assert_eq!(rule.domain_specifier, None);
+        assert_eq!(rule.css_selector, Some("class".to_string()));
+    }
+
+    #[test]
+    fn test_cosmetic_filter_domain_with_hyphens() {
+        // Domain may include hyphens or digits
+        let line = "sub-domain.example123.org##banner-1.2";
+        let rule = parse_cosmetic_filter(line).unwrap().1;
+        assert_eq!(rule.category, FilterCategory::Cosmetic);
+        assert_eq!(
+            rule.domain_specifier,
+            Some("sub-domain.example123.org".to_string())
+        );
+        assert_eq!(rule.css_selector, Some("banner-1.2".to_string()));
+    }
+
+    #[test]
+    fn test_network_filter_strip_only_one_trailing_pipe() {
+        // "||ads||" (no '$') -> raw_pattern = "||ads||", then pop one '|' -> "||ads|"
+        let line = "||ads||";
+        let rule = parse_network_filter(line).unwrap().1;
+        assert_eq!(rule.pattern, "||ads|".to_string());
+        assert!(rule.options.is_none());
+    }
+
+    #[test]
+    fn test_parse_easylist_ignores_invalid_lines_and_counts_only_valid() {
+        let contents = r#"
+            invalid line $$$
+            ||good.example^$script
+            example.com##.cls
+            foo bar baz
+            "#;
+        let rules = parse_easylist(&contents.to_string());
+        // Only two valid filters: one network, one cosmetic
+        assert_eq!(rules.len(), 2);
+
+        // Check the network one first:
+        assert_eq!(rules[0].category, FilterCategory::Network);
+        assert_eq!(rules[0].pattern, "||good.example^".to_string());
+
+        // Check the cosmetic one second:
+        assert_eq!(rules[1].category, FilterCategory::Cosmetic);
+        assert_eq!(rules[1].css_selector, Some("cls".to_string()));
+    }
+
+    #[test]
+    fn test_network_filter_pattern_with_caret_anchor_preserved() {
+        // Make sure '^' remains in pattern
+        let line = "|http://site.test/path^$image";
+        let rule = parse_network_filter(line).unwrap().1;
+        assert_eq!(rule.pattern, "|http://site.test/path^".to_string());
+        let opts = rule.options.unwrap();
+        assert!(opts.resource_types.contains(&"image".to_string()));
+    }
+
+    #[test]
+    fn test_cosmetic_exception_global_no_domain_and_dot_selector() {
+        // "#@#.popup" should yield category = CosmeticException, no domain, selector "popup"
+        let line = "#@#.popup";
+        let rule = parse_cosmetic_filter(line).unwrap().1;
+        assert_eq!(rule.category, FilterCategory::CosmeticException);
+        assert_eq!(rule.domain_specifier, None);
+        assert_eq!(rule.css_selector, Some("popup".to_string()));
+    }
+
+    #[test]
+    fn test_network_filter_domain_option_with_empty_value() {
+        // domain= (no value) -> split("") = [""]
+        let line = "||something.test^$domain=";
+        let rule = parse_network_filter(line).unwrap().1;
+        let opts = rule.options.unwrap();
+        assert_eq!(opts.domain_includes, vec!["".to_string()]);
+        assert!(opts.domain_excludes.is_empty());
+    }
 }
