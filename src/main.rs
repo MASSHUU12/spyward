@@ -1,5 +1,6 @@
 mod bindings;
 mod cli;
+mod domain_trie;
 mod easylist;
 mod errors;
 mod ip;
