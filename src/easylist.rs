@@ -137,7 +137,7 @@ fn parse_network_filter(input: &str) -> IResult<&str, FilterRule> {
             } else if opt == "first-party" {
                 netopt.third_party = Some(false);
             } else if let Some(rest) = opt.strip_prefix("domain=") {
-                // domain list can be separated by '|'
+                // Domain list can be separated by '|'
                 for dom in rest.split('|') {
                     if dom.starts_with('~') {
                         netopt
@@ -207,10 +207,9 @@ fn parse_cosmetic_filter(input: &str) -> IResult<&str, FilterRule> {
     let (rem3, selector_raw) = not_line_ending(rem2)?;
     let selector = selector_raw.trim();
 
+    // Strip all leading '#' and '.' from the selector
     let selector_trimmed = selector
-        .strip_prefix('#')
-        .or_else(|| selector.strip_prefix('.'))
-        .unwrap_or(selector)
+        .trim_start_matches(|c| c == '#' || c == '.')
         .to_string();
 
     let category = if is_exception {
@@ -246,6 +245,16 @@ fn parse_line(input: &str) -> Option<FilterRule> {
         return None;
     }
 
+    // If it starts with '!' or is of the form "[...]", skip it entirely.
+    if line.starts_with('!') || (line.starts_with('[') && line.ends_with(']')) {
+        return None;
+    }
+
+    // If there's any internal whitespace (spaces/tabs), it's not a valid filter
+    if line.chars().any(|c: char| c.is_whitespace()) {
+        return None;
+    }
+
     // Try cosmetic first—but only if it consumes the entire line
     if let Ok((rem, rule)) = parse_cosmetic_filter(line) {
         if rem.trim().is_empty() {
@@ -263,7 +272,7 @@ fn parse_line(input: &str) -> Option<FilterRule> {
     None
 }
 
-pub fn parse_easylist(contents: &str) -> Vec<FilterRule> {
+pub fn parse_easylist(contents: &String) -> Vec<FilterRule> {
     contents.lines().filter_map(|l| parse_line(l)).collect()
 }
 
@@ -430,7 +439,7 @@ mod tests {
             @@||b.example.org^$third-party,script
             ###floating-ad
             "#;
-        let rules = parse_easylist(contents);
+        let rules = parse_easylist(&contents.to_string());
         // We expect 4 rules (two network, two cosmetic)
         assert_eq!(rules.len(), 4);
 
