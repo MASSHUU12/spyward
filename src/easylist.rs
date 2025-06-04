@@ -10,6 +10,7 @@ use nom::{
     },
     character::complete::{char, not_line_ending},
     combinator::{map, map_res, opt, recognize},
+    error::Error,
     multi::separated_list1,
     sequence::{delimited, preceded, terminated},
     IResult, Parser,
@@ -120,26 +121,47 @@ fn parse_anchor(input: &str) -> IResult<&str, Anchor> {
     .parse(input)
 }
 
+fn looks_like_regex(input: &str) -> bool {
+    let mut chars = input.chars().peekable();
+    if chars.next() != Some('/') {
+        return false;
+    }
+    let mut prev_backslash = false;
+    for c in chars {
+        if c == '/' && !prev_backslash {
+            return true;
+        }
+        prev_backslash = c == '\\' && !prev_backslash;
+    }
+    false
+}
+
 fn parse_pattern_or_regex(input: &str) -> IResult<&str, FilterPattern> {
-    // Try PCRE regex: / ... /, allowing escaped "/" and "\" inside
-    let parse_regex = map_res(
-        delimited(
-            char('/'),
-            recognize(escaped(
-                is_not("/\\"),
-                '\\',
-                nom::character::complete::anychar,
-            )),
-            char('/'),
-        ),
-        |raw_re: &str| {
-            let processed = raw_re.replace("\\/", "/");
-            Regex::new(&processed).map(FilterPattern::Regex)
-        },
-    );
+    if looks_like_regex(input) {
+        // Try PCRE regex: / ... /, allowing escaped "/" and "\" inside
+        let mut parse_regex = map_res(
+            delimited(
+                char::<_, Error<&str>>('/'),
+                recognize(escaped(
+                    is_not("/\\"),
+                    '\\',
+                    nom::character::complete::anychar,
+                )),
+                char::<_, Error<&str>>('/'),
+            ),
+            |raw_re: &str| {
+                let processed = raw_re.replace("\\/", "/");
+                Regex::new(&processed).map(FilterPattern::Regex)
+            },
+        );
+
+        if let Ok((rem, regex_pat)) = parse_regex.parse(input) {
+            return Ok((rem, regex_pat));
+        }
+    }
 
     // Fallback: literal substring up to '$' or end‐of‐line (no newlines)
-    let parse_literal = map(
+    let mut parse_literal = map(
         recognize(take_while1(|c: char| c != '$' && not_newline(c))),
         |s: &str| {
             let trimmed = s.trim();
@@ -149,7 +171,7 @@ fn parse_pattern_or_regex(input: &str) -> IResult<&str, FilterPattern> {
         },
     );
 
-    alt((parse_regex, parse_literal)).parse(input)
+    parse_literal.parse(input)
 }
 
 fn parse_single_option(input: &str) -> IResult<&str, &str> {
@@ -161,7 +183,6 @@ fn parse_option_list(input: &str) -> IResult<&str, Vec<&str>> {
 }
 
 fn parse_network_filter(input: &str) -> IResult<&str, FilterRule> {
-    // Save the original line for raw_filter
     let original_line = {
         let line = input.lines().next().unwrap_or("");
         let mut s = String::with_capacity(line.len());
@@ -713,5 +734,45 @@ mod tests {
         let opts = rule.options.unwrap();
         assert_eq!(opts.domain_includes, vec!["".to_string()]);
         assert!(opts.domain_excludes.is_empty());
+    }
+
+    #[test]
+    fn test_unclosed_slash_as_literal() {
+        let line = "/?abt_opts=1&";
+        let rule = parse_network_filter(line).unwrap().1;
+        assert_eq!(rule.as_literal().unwrap(), "/?abt_opts=1&");
+        assert!(rule.options.is_none());
+    }
+
+    #[test]
+    fn test_literal_with_question_mark_and_ampersand() {
+        let line = "/ads?client=";
+        let rule = parse_network_filter(line).unwrap().1;
+        assert_eq!(rule.as_literal().unwrap(), "/ads?client=");
+        assert!(rule.options.is_none());
+    }
+
+    #[test]
+    fn test_pattern_with_ampersand_and_subdocument_option() {
+        let line = "/?fp=*&poru=$subdocument";
+        let rule = parse_network_filter(line).unwrap().1;
+        assert_eq!(rule.as_literal().unwrap(), "/?fp=*&poru=");
+        let opts = rule.options.unwrap();
+        assert!(opts.resource_types.contains(&"subdocument".to_string()));
+    }
+
+    #[test]
+    fn test_double_pipes_literal_middle() {
+        let line = "||ads||";
+        let rule = parse_network_filter(line).unwrap().1;
+        assert_eq!(rule.as_literal().unwrap(), "||ads|");
+    }
+
+    #[test]
+    fn test_pattern_with_multiple_trailing_pipes_strip_one() {
+        let line = "||foo||||";
+        let rule = parse_network_filter(line).unwrap().1;
+        // Only one trailing '|' removed
+        assert_eq!(rule.as_literal().unwrap(), "||foo|||");
     }
 }
