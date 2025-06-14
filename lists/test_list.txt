@@ -1,0 +1,123 @@
+! Blank lines and full-line comments
+
+! This is a full-line comment and should be ignored by the parser
+
+! Simple domain blocking
+||example.com^
+
+! Subdomain blocking (inherits domain block)
+||sub.example.com^
+
+! Wildcard blocking in URL (images)
+|http://*ads.example.*^$image
+
+! Beginning-of-URL anchor
+|http://ads.example.com^banner.gif
+
+! End-of-URL anchor
+banner.example.com|
+
+! Separator anchor (^ matches start/end, slash, & or end-of-URL)
+||example.com^/path/to/asset.js
+
+! Exception rule (whitelisting)
+@@||example.com^$third-party
+
+! Element hiding (CSS selector)
+example.com###ad_banner
+
+! Element hiding with pseudo-class
+example.com##.ad-slot:nth-of-type(2)
+
+! Cosmetic exception (CSS selector exception)
+example.com#@#.ad-slot
+
+! CSS injection (style override)
+example.com##body:style(position:fixed!important;background:red!important;)
+
+! Regular expression rule (simple)
+/banner_[0-9]+\.png$/
+
+! Regular expression with resource type
+/https:\/\/(ads|track)\.example\.com\/.*\.js$/$script
+
+! Blocking with single option
+||ads.example.com^$script
+
+! Blocking with multiple options and domains
+||ads.example.com^$script,image,third-party,domain=example.com|~forum.example.com
+
+! Blocking with domain-only option
+||ads.only.com^$domain=example.com
+
+! Domain exception within options
+||ads.only.com^$domain=example.com|~sub.example.com
+
+! Unknown/invalid option must be skipped
+||ads.example.com^$invalid_option,stylesheet
+
+! Leading/trailing whitespace around rule
+   ||whitespace.example.com^
+
+! Universal wildcard rule (should be valid but match all)
+/.*$/
+
+! Single literal asterisk rule (literal, not wildcard)
+|*|
+
+! Unicode/Punycode domain blocking
+||xn--exmple-cua.com^
+
+! Blocking on custom port
+||example.com:6969^
+
+! Query-string option
+||track.example.com^$querystring=ref
+
+! Case-sensitive match option
+||CaseSensitive.COM^$match-case
+
+! Removal of URL parameter
+||example.com^$removeparam=/sessid|token/
+
+! Resource type combination
+||fonts.example.com^$font,stylesheet
+
+! First-party only using negation (~third-party)
+||example.com^$~third-party
+
+! Rule with only separator anchors
+|^|
+
+! Edge-case: empty rule (should be ignored)
+
+!
+
+! Mixed-IDN and ASCII hostnames
+||例子.测试^
+||xn--fsqu00a.xn--0zwm56d^
+
+! Path-only match (no anchors)
+/ads/banner/
+
+! Complex option ordering
+||ads.example.com^$domain=example.com|shop.example.com,third-party,script,image
+
+! Multiple exception rules back-to-back
+@@||good.example.com^
+@@||trusted.example.com^$image
+
+! CSS selector with attribute
+example.com##div[onclick*="adClick"]
+
+! Regular expression with lookahead (unsupported, should be parsed as literal or flagged)
+!/ads/(?=banner)/img$/
+
+! Separator anchor at end with query
+||example.com^?session=*
+
+! Rule containing a hash (#) in URL
+|https://static.example.com/assets#logo^
+
+! Element-hiding with multiple selectors
+example.com###header, .footer-ad, #popup-ad

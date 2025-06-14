@@ -539,4 +539,5 @@ FodyWeavers.xsd
 
 # End of https://www.toptal.com/developers/gitignore/api/linux,visualstudio,jetbrains+all,visualstudiocode,rust,rust-analyzer
 
-lists
+lists/**
+!lists/test_list.txt
