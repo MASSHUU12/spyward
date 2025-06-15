@@ -3,6 +3,8 @@ use std::{
     time::{Duration, Instant},
 };
 
+use crate::protocol::header::Header;
+
 #[repr(C)]
 #[derive(Debug)]
 /// https://en.wikipedia.org/wiki/Transmission_Control_Protocol
@@ -18,11 +20,16 @@ pub struct TCPHeader {
     pub urgent_ptr: u16,
 }
 
-impl TCPHeader {
+impl Header for TCPHeader {
+    const MIN_HEADER_SIZE: usize = 20;
+
     /// Parses a TCP header from the given buffer.
     /// Ensure that `buf` is at least 20 bytes.
-    pub fn parse(buf: &[u8]) -> Self {
-        assert!(buf.len() >= 20, "Buffer too small for TCP header");
+    fn parse(buf: &[u8]) -> Self {
+        assert!(
+            buf.len() >= Self::MIN_HEADER_SIZE,
+            "Buffer too small for TCP header"
+        );
 
         let source_port = u16::from_be_bytes([buf[0], buf[1]]);
         let dest_port = u16::from_be_bytes([buf[2], buf[3]]);
@@ -51,7 +58,7 @@ impl TCPHeader {
         }
     }
 
-    pub fn header_length(&self) -> usize {
+    fn header_length(&self) -> usize {
         (self.data_offset as usize) * 4
     }
 }
@@ -76,6 +83,7 @@ impl TCPConnectionKey {
     }
 }
 
+// TODO: Cap total memory usage: if too many concurrent connections, evict oldest.
 /// A reassembly buffer for one direction of one TCP connection.
 pub struct TCPReassemblyBuffer {
     next_seq: u32,

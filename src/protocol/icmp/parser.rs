@@ -1,3 +1,5 @@
+use crate::protocol::header::Header;
+
 #[repr(C)]
 #[derive(Debug)]
 /// https://en.wikipedia.org/wiki/Internet_Control_Message_Protocol
@@ -9,11 +11,16 @@ pub struct ICMPHeader {
     pub sequence_number: u16,
 }
 
-impl ICMPHeader {
+impl Header for ICMPHeader {
+    const MIN_HEADER_SIZE: usize = 8;
+
     /// Parses an ICMP header from the given buffer.
     /// The fields after the first 4 bytes may differ in format based on ICMP message type.
-    pub fn parse(buf: &[u8]) -> Self {
-        assert!(buf.len() >= 8, "Buffer too small for ICMP header");
+    fn parse(buf: &[u8]) -> Self {
+        assert!(
+            buf.len() >= Self::MIN_HEADER_SIZE,
+            "Buffer too small for ICMP header"
+        );
 
         let icmp_type = buf[0];
         let icmp_code = buf[1];
@@ -28,5 +35,9 @@ impl ICMPHeader {
             identifier,
             sequence_number,
         }
+    }
+
+    fn header_length(&self) -> usize {
+        Self::MIN_HEADER_SIZE
     }
 }
