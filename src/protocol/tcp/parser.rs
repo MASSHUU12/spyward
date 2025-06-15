@@ -3,7 +3,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use crate::protocol::header::Header;
+use crate::protocol::{header::Header, reassembly::buffer::ReassemblyBuffer};
 
 #[repr(C)]
 #[derive(Debug)]
@@ -23,6 +23,8 @@ pub struct TCPHeader {
 impl Header for TCPHeader {
     const MIN_HEADER_SIZE: usize = 20;
 
+    // TODO: Return Result instead of panicking
+    // TODO: Define enum ParseError { BufferTooSmall, InvalidDataOffset, /* … */ }
     /// Parses a TCP header from the given buffer.
     /// Ensure that `buf` is at least 20 bytes.
     fn parse(buf: &[u8]) -> Self {
@@ -39,11 +41,14 @@ impl Header for TCPHeader {
         let data_offset_raw = buf[12] >> 4;
         let reserved_flags = u16::from_be_bytes([buf[12] & 0x0F, buf[13]]);
         let data_offset = data_offset_raw;
+        // Use bitflags for flags
         let flags = (reserved_flags & 0x003F) as u8;
 
         let window_size = u16::from_be_bytes([buf[14], buf[15]]);
         let checksum = u16::from_be_bytes([buf[16], buf[17]]);
         let urgent_ptr = u16::from_be_bytes([buf[18], buf[19]]);
+
+        // TODO: Parse options
 
         TCPHeader {
             source_port,
@@ -66,6 +71,7 @@ impl Header for TCPHeader {
 /// A simple key identifying one TCP flow in one direction.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct TCPConnectionKey {
+    // TODO: Use std::net::IpAddr
     pub src_ip: String,
     pub dst_ip: String,
     pub src_port: u16,
@@ -119,7 +125,7 @@ impl TCPReassemblyBuffer {
 
     /// Convenience alias for `with_timestamps(...)`.
     pub fn new(initial_seq: u32) -> Self {
-        TCPReassemblyBuffer::with_timestamps(initial_seq)
+        Self::with_timestamps(initial_seq)
     }
 
     /// Pushes a TCP segment into the buffer.
@@ -134,7 +140,6 @@ impl TCPReassemblyBuffer {
     /// Returns a slice of *all* assembled bytes so far (from the initial sequence number up to
     /// the highest contiguous byte).
     pub fn push_segment(&mut self, seq: u32, data: &[u8]) -> &[u8] {
-        // Update last_seen whenever we receive a segment.
         self.last_seen = Instant::now();
 
         // Ignore data we've already consumed
@@ -178,6 +183,7 @@ impl TCPReassemblyBuffer {
         if haystack.len() < 4 {
             return None;
         }
+        // TODO: Optimize using memchr
         for i in 0..=(haystack.len() - 4) {
             if &haystack[i..i + 4] == b"\r\n\r\n" {
                 return Some(i + 4);
@@ -189,6 +195,51 @@ impl TCPReassemblyBuffer {
     /// Returns how long it has been since we last saw any segment for this buffer.
     pub fn age(&self) -> Duration {
         Instant::now().saturating_duration_since(self.last_seen)
+    }
+}
+
+impl ReassemblyBuffer for TCPReassemblyBuffer {
+    type Seq = u32;
+
+    fn new(initial_seq: Self::Seq) -> Self {
+        TCPReassemblyBuffer::with_timestamps(initial_seq)
+    }
+
+    fn push_segment(&mut self, seq: Self::Seq, data: &[u8]) -> &[u8] {
+        self.push_segment(seq, data)
+    }
+
+    /// Here we treat a "message boundary" as end of HTTP header, if not done yet.
+    fn find_message_boundary(&self) -> Option<usize> {
+        // If HTTP not done, look for header end; else None or could implement body-length-based.
+        if !self.http_done {
+            self.find_header_end()
+        } else {
+            None
+        }
+    }
+
+    fn advance_past(&mut self, boundary: usize) {
+        // Drop the first `boundary` bytes from `assembled`.
+        if boundary == 0 {
+            return;
+        }
+        if boundary >= self.assembled.len() {
+            // Drop all
+            self.assembled.clear();
+        } else {
+            // Remove consumed bytes
+            self.assembled.drain(0..boundary);
+        }
+        // Note: next_seq has already advanced when assembling; assembled now holds the "tail".
+    }
+
+    fn touch(&mut self) {
+        self.last_seen = Instant::now();
+    }
+
+    fn last_seen(&self) -> Instant {
+        self.last_seen
     }
 }
 
