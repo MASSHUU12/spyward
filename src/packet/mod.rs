@@ -1,5 +1,6 @@
 pub mod dispatcher;
 pub mod handler;
+pub mod inspection;
 
 use crate::{
     ip::IPProtocol,

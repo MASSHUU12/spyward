@@ -1,3 +1,5 @@
+use crate::protocol::header::Header;
+
 #[repr(C)]
 #[derive(Debug)]
 /// https://en.wikipedia.org/wiki/User_Datagram_Protocol
@@ -8,11 +10,16 @@ pub struct UDPHeader {
     pub checksum: u16,
 }
 
-impl UDPHeader {
+impl Header for UDPHeader {
+    const MIN_HEADER_SIZE: usize = 8;
+
     /// Parses a UDP header from the given buffer.
     /// Ensure that `buf` is at least 8 bytes.
-    pub fn parse(buf: &[u8]) -> Self {
-        assert!(buf.len() >= 8, "Buffer too small for UDP header");
+    fn parse(buf: &[u8]) -> Self {
+        assert!(
+            buf.len() >= Self::MIN_HEADER_SIZE,
+            "Buffer too small for UDP header"
+        );
 
         let source_port = u16::from_be_bytes([buf[0], buf[1]]);
         let dest_port = u16::from_be_bytes([buf[2], buf[3]]);
@@ -25,5 +32,9 @@ impl UDPHeader {
             length,
             checksum,
         }
+    }
+
+    fn header_length(&self) -> usize {
+        Self::MIN_HEADER_SIZE
     }
 }

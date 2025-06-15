@@ -7,10 +7,10 @@ mod filter_engine;
 mod ip;
 mod nfqueue;
 mod nftables;
-mod packet_inspection;
+mod packet;
 mod protocol;
+mod sni;
 
-use crate::packet_inspection::packet_inspection;
 use clap::Parser;
 use cli::{Action, Cli};
 use errors::SpyWardError;
@@ -19,6 +19,8 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
 };
+
+use crate::packet::inspection::packet_inspection;
 
 extern crate libc;
 
