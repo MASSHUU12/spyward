@@ -51,7 +51,7 @@ DNS requests/responses are not parsed or filtered.
 - **ICMP always accepts**: The ICMP handler prints and always returns Accept;
 no rate-limiting or filtering of ICMP types.
 - **Other protocols accepted**:
-In `packet_inspection`, any unsupported IPPrtocol falls through and is accepted.
+In `packet_inspection`, any unsupported IPProtocol falls through and is accepted.
 - **No TLS certificate inspection**:
 Beyond SNI, nothing examines TLS certificates or OCSP.
 
