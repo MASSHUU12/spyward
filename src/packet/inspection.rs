@@ -38,7 +38,6 @@ fn set_verdict(qh: *mut nfq_q_handle, pkt_id: u32, v: Verdict) -> c_int {
     r as c_int
 }
 
-// TODO: Collect stats (total, accepted, dropped)
 pub unsafe extern "C" fn packet_inspection(
     qh: *mut nfq_q_handle,
     _nfmsg: *mut nfgenmsg,
@@ -50,10 +49,14 @@ pub unsafe extern "C" fn packet_inspection(
 
     // TODO: Log only when rejected or --verbose
     // TODO: Use --verbose option
-    // TODO: Check DNS for source
-    // TODO: Allow custom blocklist/allowlist
-    // TODO: Implement statistics (accepted/rejected counts)
+    // TODO: DNS resolution
+    // TODO: DNS parsing/filtering
+    // TODO: Implement statistics (total,accepted/dropped counts). Use prometheus create?
     // TODO: Add unit tests for packetCallback logic
+    // TODO: Asynchronous work
+    // TODO: Plugin support, each plugin declares which port/protocols it handles and how to match.
+    // TODO: MITM for encrypted traffic
+    // TODO: TLS inspection
 
     let hdr: Box<dyn IIPHeader> = ip::parse_ip_header(&packet_bytes);
     let transport = &packet_bytes[hdr.header_length() as usize..];

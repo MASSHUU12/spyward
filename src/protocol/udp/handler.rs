@@ -15,7 +15,7 @@ impl UdpPacketHandler {
 impl PacketHandler for UdpPacketHandler {
     type Header = UDPHeader;
 
-    // TODO: Handle HTTP/3
+    // TODO: Handle HTTP/3, QUIC
     fn inspect(&mut self, meta: &PacketMeta, hdr: &UDPHeader, _payload: &[u8]) -> Verdict {
         println!(
             "UDP {}:{} -> {}:{} {:?}",
