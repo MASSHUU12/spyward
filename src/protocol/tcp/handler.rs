@@ -6,7 +6,7 @@ use crate::{
     filter_engine::{Verdict, FILTER_ENGINE},
     packet::{handler::PacketHandler, PacketMeta},
     protocol::{
-        http::{HTTPRequest, HTTPResponse},
+        http::{HTTPRequest, HTTPResponse, HttpMessage},
         reassembly::{buffer::ReassemblyBuffer, manager::ReassemblyManager},
         tcp::parser::{TCPConnectionKey, TCPHeader, TCPReassemblyBuffer},
     },
@@ -82,8 +82,8 @@ impl PacketHandler for TcpPacketHandler {
                     if HTTPRequest::is_request(header_bytes) {
                         if let Ok(req) = HTTPRequest::parse(header_bytes) {
                             if let Some(host) = req.header_value("Host") {
-                                let method = &req.method;
-                                let path = &req.path;
+                                let method = &req.message.method;
+                                let path = &req.message.path;
                                 let url = format!("http://{}{}", host, path);
                                 println!(
                                     "HTTP-> {} {} from {}:{}",
@@ -102,7 +102,10 @@ impl PacketHandler for TcpPacketHandler {
                         if let Ok(resp) = HTTPResponse::parse(header_bytes) {
                             println!(
                                 "HTTP<- {} {} from {}:{}",
-                                resp.status_code, resp.reason_phrase, meta.dst, hdr.dest_port
+                                resp.message.status_code,
+                                resp.message.reason_phrase,
+                                meta.dst,
+                                hdr.dest_port
                             );
                         }
                     }

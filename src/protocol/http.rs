@@ -1,92 +1,134 @@
 use std::collections::HashMap;
 use std::str;
 
+use thiserror::Error;
+
 static HTTP_METHODS: [&'static str; 9] = [
     "GET", "HEAD", "POST", "PUT", "DELETE", "CONNECT", "OPTIONS", "TRACE", "PATCH",
 ];
 
-#[derive(Debug, PartialEq)]
+#[derive(Error, Debug, PartialEq)]
 pub enum ParseError {
+    #[error("invalid UTF-8")]
     InvalidUtf8,
+
+    #[error("missing start line")]
     MissingStartLine,
+
+    #[error("not enough parts on start line")]
     NotEnoughStartLineParts,
+
+    #[error("missing headers terminator (\\r\\n\\r\\n)")]
     MissingHeaderTerminator,
+
+    #[error("invalid header line: {0}")]
     InvalidHeaderLine(String),
+
+    #[error("invalid status code: {0}")]
     InvalidStatusCode(String),
 }
 
-/// Given the text _after_ the first line (i.e. everything from just past "\r\n"
-/// through the end of the buffer), find the "\r\n\r\n" that ends the headers.
-/// Return a (headers map, body slice).
-fn parse_headers_and_body(full: &str) -> Result<(HashMap<String, String>, &[u8]), ParseError> {
-    if let Some(idx) = full.find("\r\n\r\n") {
-        let header_block = &full[..idx];
-        let body_start = idx + 4; // skip past "\r\n\r\n"
-        let mut headers = HashMap::new();
+/// A thin trait for parsing the start-line of both requests and responses.
+pub trait HttpMessage<'a>: Sized {
+    /// True if payload *looks* like this message type.
+    fn is_type(text: &str) -> bool;
 
-        for line in header_block.split("\r\n") {
-            if let Some((key, val)) = line.split_once(": ") {
-                headers.insert(key.to_string(), val.to_string());
-            } else {
-                return Err(ParseError::InvalidHeaderLine(line.to_string()));
-            }
-        }
+    /// Parse the version + maybe method or status, leaving the rest behind.
+    fn parse_head(parts: &[&'a str]) -> Result<Self, ParseError>;
 
-        let raw_bytes = full.as_bytes();
-        Ok((headers, &raw_bytes[body_start..]))
-    } else {
-        Err(ParseError::MissingHeaderTerminator)
-    }
-}
-
-/// Represents a parsed HTTP request (lifetime `'a` borrows from the original payload)
-#[derive(Debug)]
-pub struct HTTPRequest<'a> {
-    pub method: &'a str,
-    pub path: &'a str,
-    pub version: &'a str,
-    pub headers: HashMap<String, String>,
-    pub body: &'a [u8],
-}
-
-impl<'a> HTTPRequest<'a> {
-    pub fn is_request(payload: &[u8]) -> bool {
-        if let Ok(text) = str::from_utf8(payload) {
-            HTTP_METHODS.iter().any(|&m| text.starts_with(m))
-        } else {
-            false
-        }
-    }
-
-    pub fn parse(payload: &'a [u8]) -> Result<Self, ParseError> {
+    /// The all-in-one parse entry point.
+    fn parse(payload: &'a [u8]) -> Result<Parsed<'a, Self>, ParseError> {
         let text = str::from_utf8(payload).map_err(|_| ParseError::InvalidUtf8)?;
-
-        let (request_line, rest) = if let Some(idx) = text.find("\r\n") {
-            (&text[..idx], &text[idx + 2..])
-        } else {
-            return Err(ParseError::MissingStartLine);
-        };
-
-        let mut parts = request_line.split_whitespace();
-        let method = parts.next().ok_or(ParseError::NotEnoughStartLineParts)?;
-        if !HTTP_METHODS.iter().any(|&m| m == method) {
-            return Err(ParseError::MissingStartLine);
+        let (head, rest) = split_once(text, "\r\n").ok_or(ParseError::MissingStartLine)?;
+        let parts: Vec<&str> = head.split_whitespace().collect();
+        if parts.len() < 2 {
+            return Err(ParseError::NotEnoughStartLineParts);
         }
-        let path = parts.next().ok_or(ParseError::NotEnoughStartLineParts)?;
-        let version = parts.next().ok_or(ParseError::NotEnoughStartLineParts)?;
-
+        let message = Self::parse_head(&parts)?;
         let (headers, body) = parse_headers_and_body(rest)?;
-        Ok(HTTPRequest {
-            method,
-            path,
-            version,
+        Ok(Parsed {
+            message,
             headers,
             body,
         })
     }
+}
 
-    pub fn header_value(&self, name: &str) -> Option<&str> {
-        self.headers.get(name).map(|v| v.as_str())
+/// The final result of parsing, with owned header map but borrowed keys/values.
+#[derive(Debug)]
+pub struct Parsed<'a, T> {
+    pub message: T,
+    pub headers: HashMap<&'a str, &'a str>,
+    pub body: &'a [u8],
+}
+
+impl<'a, T> Parsed<'a, T> {
+    /// Lookup a header value by case-sensitive header name.
+    pub fn header_value(&self, key: &str) -> Option<&'a str> {
+        self.headers.get(key).copied()
+    }
+}
+
+fn split_once<'a>(s: &'a str, pat: &str) -> Option<(&'a str, &'a str)> {
+    s.find(pat).map(|i| (&s[..i], &s[i + pat.len()..]))
+}
+
+/// Parses all headers, returns a borrowed map of &str to &str + body slice.
+fn parse_headers_and_body<'a>(
+    rest: &'a str,
+) -> Result<(HashMap<&'a str, &'a str>, &'a [u8]), ParseError> {
+    let (head, tail) = split_once(rest, "\r\n\r\n").ok_or(ParseError::MissingHeaderTerminator)?;
+    let mut map = HashMap::new();
+
+    for line in head.split("\r\n") {
+        let (k, v) = line
+            .split_once(": ")
+            .ok_or(ParseError::InvalidHeaderLine(line.to_string()))?;
+        map.insert(k, v);
+    }
+
+    let raw = rest.as_bytes();
+    // tail is the part after "\r\n\r\n"
+    let body_start = rest.len() - tail.len();
+    Ok((map, &raw[body_start..]))
+}
+
+/// Represents a parsed HTTP request (lifetime `'a` borrows from the original payload)
+#[derive(Debug, PartialEq)]
+pub struct HTTPRequest<'a> {
+    pub method: &'a str,
+    pub path: &'a str,
+    pub version: &'a str,
+}
+
+impl<'a> HTTPRequest<'a> {
+    /// Check if this payload is a request: valid UTF-8 and starts with known method
+    pub fn is_request(payload: &[u8]) -> bool {
+        if let Ok(text) = str::from_utf8(payload) {
+            Self::is_type(text)
+        } else {
+            false
+        }
+    }
+}
+
+impl<'a> HttpMessage<'a> for HTTPRequest<'a> {
+    fn is_type(text: &str) -> bool {
+        HTTP_METHODS.iter().any(|&m| text.starts_with(m))
+    }
+
+    fn parse_head(parts: &[&'a str]) -> Result<Self, ParseError> {
+        let method = parts[0];
+        if !HTTP_METHODS.contains(&method) {
+            return Err(ParseError::MissingStartLine);
+        }
+        let path = *parts.get(1).ok_or(ParseError::NotEnoughStartLineParts)?;
+        let version = *parts.get(2).ok_or(ParseError::NotEnoughStartLineParts)?;
+        Ok(HTTPRequest {
+            method,
+            path,
+            version,
+        })
     }
 }
 
@@ -96,59 +138,42 @@ pub struct HTTPResponse<'a> {
     pub version: &'a str,
     pub status_code: u16,
     pub reason_phrase: String,
-    pub headers: HashMap<String, String>,
-    pub body: &'a [u8],
 }
 
 impl<'a> HTTPResponse<'a> {
+    /// Check if this payload is a response: valid UTF-8 and starts with "HTTP/"
     pub fn is_response(payload: &[u8]) -> bool {
         if let Ok(text) = str::from_utf8(payload) {
-            text.starts_with("HTTP/")
+            Self::is_type(text)
         } else {
             false
         }
     }
+}
 
-    pub fn parse(payload: &'a [u8]) -> Result<Self, ParseError> {
-        let text = str::from_utf8(payload).map_err(|_| ParseError::InvalidUtf8)?;
+impl<'a> HttpMessage<'a> for HTTPResponse<'a> {
+    fn is_type(text: &str) -> bool {
+        text.starts_with("HTTP/")
+    }
 
-        let (status_line, rest) = if let Some(idx) = text.find("\r\n") {
-            (&text[..idx], &text[idx + 2..])
-        } else {
-            return Err(ParseError::MissingStartLine);
-        };
-
-        let mut parts = status_line.split_whitespace();
-        let version = parts.next().ok_or(ParseError::NotEnoughStartLineParts)?;
+    fn parse_head(parts: &[&'a str]) -> Result<Self, ParseError> {
+        let version = parts[0];
         if !version.starts_with("HTTP/") {
             return Err(ParseError::MissingStartLine);
         }
-        let status_str = parts.next().ok_or(ParseError::NotEnoughStartLineParts)?;
-        let reason_parts: Vec<&str> = parts.collect();
-        if reason_parts.is_empty() {
+        if parts.len() < 3 {
             return Err(ParseError::NotEnoughStartLineParts);
         }
-        let reason_phrase = reason_parts.join(" ");
-
-        let status_code = match status_str.parse::<u16>() {
-            Ok(n) => n,
-            Err(_) => {
-                return Err(ParseError::InvalidStatusCode(status_str.to_string()));
-            }
-        };
-
-        let (headers, body) = parse_headers_and_body(rest)?;
+        let status_str = parts[1];
+        let status_code = status_str
+            .parse::<u16>()
+            .map_err(|_| ParseError::InvalidStatusCode(status_str.to_string()))?;
+        let reason_phrase = parts[2..].join(" ");
         Ok(HTTPResponse {
             version,
             status_code,
             reason_phrase,
-            headers,
-            body,
         })
-    }
-
-    pub fn header_value(&self, name: &str) -> Option<&str> {
-        self.headers.get(name).map(|v| v.as_str())
     }
 }
 
@@ -193,9 +218,9 @@ mod tests {
         let raw = b"GET / HTTP/1.0\r\nHost: example.org\r\n\r\n";
         let parsed = HTTPRequest::parse(raw).unwrap();
 
-        assert_eq!(parsed.method, "GET");
-        assert_eq!(parsed.path, "/");
-        assert_eq!(parsed.version, "HTTP/1.0");
+        assert_eq!(parsed.message.method, "GET");
+        assert_eq!(parsed.message.path, "/");
+        assert_eq!(parsed.message.version, "HTTP/1.0");
 
         // Only one header
         assert_eq!(parsed.headers.len(), 1);
@@ -216,9 +241,9 @@ mod tests {
                     Hello World";
         let parsed = HTTPRequest::parse(raw).unwrap();
 
-        assert_eq!(parsed.method, "POST");
-        assert_eq!(parsed.path, "/submit");
-        assert_eq!(parsed.version, "HTTP/1.1");
+        assert_eq!(parsed.message.method, "POST");
+        assert_eq!(parsed.message.path, "/submit");
+        assert_eq!(parsed.message.version, "HTTP/1.1");
 
         assert_eq!(parsed.headers.len(), 3);
         assert_eq!(parsed.header_value("Host"), Some("example.com"));
@@ -285,9 +310,9 @@ mod tests {
         let raw = b"HTTP/1.0 204 No Content\r\nServer: RustTest\r\n\r\n";
         let parsed = HTTPResponse::parse(raw).unwrap();
 
-        assert_eq!(parsed.version, "HTTP/1.0");
-        assert_eq!(parsed.status_code, 204);
-        assert_eq!(parsed.reason_phrase, "No Content");
+        assert_eq!(parsed.message.version, "HTTP/1.0");
+        assert_eq!(parsed.message.status_code, 204);
+        assert_eq!(parsed.message.reason_phrase, "No Content");
 
         assert_eq!(parsed.headers.len(), 1);
         assert_eq!(parsed.header_value("Server"), Some("RustTest"));
@@ -305,9 +330,9 @@ mod tests {
                     <html>NotFound</html>";
         let parsed = HTTPResponse::parse(raw).unwrap();
 
-        assert_eq!(parsed.version, "HTTP/1.1");
-        assert_eq!(parsed.status_code, 404);
-        assert_eq!(parsed.reason_phrase, "Not Found");
+        assert_eq!(parsed.message.version, "HTTP/1.1");
+        assert_eq!(parsed.message.status_code, 404);
+        assert_eq!(parsed.message.reason_phrase, "Not Found");
 
         assert_eq!(parsed.headers.len(), 2);
         assert_eq!(parsed.header_value("Content-Type"), Some("text/html"));
