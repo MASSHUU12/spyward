@@ -1,6 +1,9 @@
 mod bindings;
 mod cli;
+mod domain_trie;
+mod easylist;
 mod errors;
+mod filter_engine;
 mod ip;
 mod nfqueue;
 mod nftables;
